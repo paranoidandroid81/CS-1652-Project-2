@@ -51,6 +51,78 @@ struct ClientInfo {
 
 }
 
+bool beginTransfer(TCPState * connection, Packet pkt) {
+
+}
+
+bool parsePacket () {
+
+}
+
+Packet getPacket (const MinetHandle &handle) {
+  Packet * pk = calloc(sizeof(Packet));
+  if (MinetReceive(handle, pk) > 0) return pk;
+  else return NULL; //throw error here?
+}
+
+bool resetHandshake (TCPState * connection, Packet pkt) {
+  //received reset, set handshake back to original state
+}
+
+bool sendSynAck (TCPState * connection, Packet pkt) {
+
+}
+
+bool transferData(TCPState * connection, Packet pkt) {
+
+}
+
+bool closeWait (TCPState * connection, Packet pkt) {
+
+}
+
+ bool handlePacket (TCPState * connection, Packet pkt) {
+  //Responds to an IP event based on the packet type and current connection state
+  State current = connection->getState();
+
+  switch (current) {
+
+    case (LISTEN) {
+      return IS_SYN(pkt) ? sendSynAck(connection, pkt) : false;
+    }
+
+    case (SYN_RCVD) {
+      if (IS_ACK(pkt)) return beginTransfer(connection, pkt);
+      else if (IS_RST(pkt)) return resetHandshake(connection, pkt);
+      else return false;
+    }
+
+    case (SYN_SENT) {
+      if (IS_SYN(pkt)) { return IS_ACK(pkt) ? beginTransfer(connection, pkt) : sendSynAck(connection, pkt); }
+      else return false;
+    }
+    case (ESTABLISHED) {
+      return IS_FIN(pkt) ? closeWait(connection, pkt) : transferData(connnection, pkt);
+    }
+
+    case (FIN_WAIT_1) {
+     return IS_FIN(pkt) ? (IS_ACK(pkt) ? timeWait(connection, pkt) : initiateClose(connection, pkt)) : (IS_ACK(pkt) ? finWait2(connection, pkt) : false);
+    }
+
+    case (FIN_WAIT_2) {
+      return IS_FIN(pkt) ? timeWait(connection, pkt) : false;
+    }
+
+    case (CLOSING) {
+      return IS_ACK(pkt) ? timeWait(connection, pkt) : false;
+    }
+
+    default { return false; }
+    
+    }
+  }
+}
+
 struct TCPState {
     // need to write this
     std::ostream & Print(std::ostream &os) const {
@@ -66,9 +138,11 @@ struct TCPState {
 
     private clientInfo client;
 
+    State getState () { return currentState; }
+
 };
 
-bool listen(TCPState * connection) {
+bool listen(TCPState * connection, MinetHandle * ipmux, MinetHandle * minSock) {
   //Waits to receive syn or be asked to send data, sends syn-ack to client
 
   State deisred = CLOSED;
@@ -84,15 +158,15 @@ bool activeOpen(TCPState * connection) {
 
 }
 
-bool passiveOpen (TCPState * connection) {
+bool passiveOpen (TCPState * connection, MinetHandle * ipmux, MinetHandle * sock ) {
   //Passively opens a connection
+  listen(connection, ipmux, );
 
   conductStateTransition(CLOSED, LISTEN, connection);
 }
 
-bool receiveSyn() {
-   //Recieves syn, sends ack
-   
+bool receiveSyn(TCPState * connection, MinetHandle * ipmux) {
+
 }
 
 
@@ -143,11 +217,12 @@ int main(int argc, char * argv[]) {
 	    (event.direction == MinetEvent::IN)) {
 
 	    if (event.handle == mux) {
-		// ip packet has arrived!
+		      // ip packet has arrived! (PASSIVE DATAFLOW)
+          handlePacket(connection, getPacket(&mux));
 	    }
 
 	    if (event.handle == sock) {
-		// socket request or response has arrived
+		      // socket request or response has arrived (APP LAYER REQUEST)
 	    }
 	}
 
