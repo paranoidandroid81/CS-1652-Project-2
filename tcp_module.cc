@@ -31,24 +31,36 @@ using namespace std;
 enum State = {CLOSED, LISTEN, SYN_RCVD, SYN_SENT, ESTABLISHED, CLOSE_WAIT,
 LAST_ACK, FIN_WAIT_1, FIN_WAIT_2, CLOSING, TIME_WAIT};
 
+struct TCPState {
+    // need to write this
+    std::ostream & Print(std::ostream &os) const {
+	     os << "TCPState()" ;
+	     return os;
+    }
+
+    private State currentState;
+
+    MinetHandle sockFD, ipMux;
+
+    bool isInState (State check) { return check == currentState; }
+
+    void setStateTo (State newState) { currentState = newState; }
+
+    private int srcPort;
+    private struct IPAddress srcIP;
+    private int destPort;
+    private struct IPAddress destIP;
+
+    State getState () { return currentState; }
+
+};
+
 bool conductStateTransition (State current, State next, TCPState * connection) {
   if (!connection->isInState(current)) return false;
   else {
     connection->setStateTo(next);
     return true;
   }
-}
-
-struct ClientInfo {
-
-  struct IPAddress myIP;
-  int portNum;
-
-  ClientInfo (const struct IPAddress * ip, int port) {
-    myIP = IPAddress (ip);
-    portNum = port;
-  }
-
 }
 
 bool beginTransfer(TCPState * connection, Packet pkt) {
@@ -118,29 +130,10 @@ bool closeWait (TCPState * connection, Packet pkt) {
     }
 
     default { return false; }
-    
+
     }
   }
 }
-
-struct TCPState {
-    // need to write this
-    std::ostream & Print(std::ostream &os) const {
-	     os << "TCPState()" ;
-	     return os;
-    }
-
-    private State currentState;
-
-    bool isInState (State check) { return check == currentState; }
-
-    void setStateTo (State newState) { currentState = newState; }
-
-    private clientInfo client;
-
-    State getState () { return currentState; }
-
-};
 
 bool listen(TCPState * connection, MinetHandle * ipmux, MinetHandle * minSock) {
   //Waits to receive syn or be asked to send data, sends syn-ack to client
