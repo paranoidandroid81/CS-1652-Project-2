@@ -22,11 +22,34 @@
 #include <iostream>
 
 #include "Minet.h"
+#include "ip.h"
+#include "tcp.h"
+#include "packet.h"
 
 using namespace std;
 
 enum State = {CLOSED, LISTEN, SYN_RCVD, SYN_SENT, ESTABLISHED, CLOSE_WAIT,
 LAST_ACK, FIN_WAIT_1, FIN_WAIT_2, CLOSING, TIME_WAIT};
+
+bool conductStateTransition (State current, State next, TCPState * connection) {
+  if (!connection->isInState(current)) return false;
+  else {
+    connection->setStateTo(next);
+    return true;
+  }
+}
+
+struct ClientInfo {
+
+  struct IPAddress myIP;
+  int portNum;
+
+  ClientInfo (const struct IPAddress * ip, int port) {
+    myIP = IPAddress (ip);
+    portNum = port;
+  }
+
+}
 
 struct TCPState {
     // need to write this
@@ -37,8 +60,40 @@ struct TCPState {
 
     private State currentState;
 
+    bool isInState (State check) { return check == currentState; }
+
+    void setStateTo (State newState) { currentState = newState; }
+
+    private clientInfo client;
 
 };
+
+bool listen(TCPState * connection) {
+  //Waits to receive syn or be asked to send data, sends syn-ack to client
+
+  State deisred = CLOSED;
+  if (!connection->isInState(CLOSED)) return false;
+  else connection->setStateTo(LISTEN);
+
+}
+
+bool activeOpen(TCPState * connection) {
+  //Actively opens a connection to a client
+  if ( !(connection->isInState(CLOSED) || connection->isInState(LISTED)) ) return false;
+
+
+}
+
+bool passiveOpen (TCPState * connection) {
+  //Passively opens a connection
+
+  conductStateTransition(CLOSED, LISTEN, connection);
+}
+
+bool receiveSyn() {
+   //Recieves syn, sends ack
+   
+}
 
 
 int main(int argc, char * argv[]) {
@@ -49,6 +104,8 @@ int main(int argc, char * argv[]) {
 
     MinetInit(MINET_TCP_MODULE);
 
+
+    //This is a minet handle, call recv to get packets
     mux = MinetIsModuleInConfig(MINET_IP_MUX) ?
 	MinetConnect(MINET_IP_MUX) :
 	MINET_NOHANDLE;
