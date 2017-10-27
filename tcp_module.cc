@@ -1,7 +1,7 @@
 // You will build this in project part B - this is merely a
 // stub that does nothing but integrate into the stack
 
-// For project parts A and B, an appropriate binary will be 
+// For project parts A and B, an appropriate binary will be
 // copied over as part of the build process
 
 
@@ -25,32 +25,39 @@
 
 using namespace std;
 
+enum State = {CLOSED, LISTEN, SYN_RCVD, SYN_SENT, ESTABLISHED, CLOSE_WAIT,
+LAST_ACK, FIN_WAIT_1, FIN_WAIT_2, CLOSING, TIME_WAIT};
+
 struct TCPState {
     // need to write this
-    std::ostream & Print(std::ostream &os) const { 
-	os << "TCPState()" ; 
-	return os;
+    std::ostream & Print(std::ostream &os) const {
+	     os << "TCPState()" ;
+	     return os;
     }
+
+    private State currentState;
+
+
 };
 
 
 int main(int argc, char * argv[]) {
     MinetHandle mux;
     MinetHandle sock;
-    
+
     ConnectionList<TCPState> clist;
 
     MinetInit(MINET_TCP_MODULE);
 
-    mux = MinetIsModuleInConfig(MINET_IP_MUX) ?  
-	MinetConnect(MINET_IP_MUX) : 
-	MINET_NOHANDLE;
-    
-    sock = MinetIsModuleInConfig(MINET_SOCK_MODULE) ? 
-	MinetAccept(MINET_SOCK_MODULE) : 
+    mux = MinetIsModuleInConfig(MINET_IP_MUX) ?
+	MinetConnect(MINET_IP_MUX) :
 	MINET_NOHANDLE;
 
-    if ( (mux == MINET_NOHANDLE) && 
+    sock = MinetIsModuleInConfig(MINET_SOCK_MODULE) ?
+	MinetAccept(MINET_SOCK_MODULE) :
+	MINET_NOHANDLE;
+
+    if ( (mux == MINET_NOHANDLE) &&
 	 (MinetIsModuleInConfig(MINET_IP_MUX)) ) {
 
 	MinetSendToMonitor(MinetMonitoringEvent("Can't connect to ip_mux"));
@@ -58,14 +65,14 @@ int main(int argc, char * argv[]) {
 	return -1;
     }
 
-    if ( (sock == MINET_NOHANDLE) && 
+    if ( (sock == MINET_NOHANDLE) &&
 	 (MinetIsModuleInConfig(MINET_SOCK_MODULE)) ) {
 
 	MinetSendToMonitor(MinetMonitoringEvent("Can't accept from sock_module"));
 
 	return -1;
     }
-    
+
     cerr << "tcp_module STUB VERSION handling tcp traffic.......\n";
 
     MinetSendToMonitor(MinetMonitoringEvent("tcp_module STUB VERSION handling tcp traffic........"));
@@ -75,9 +82,9 @@ int main(int argc, char * argv[]) {
 
     while (MinetGetNextEvent(event, timeout) == 0) {
 
-	if ((event.eventtype == MinetEvent::Dataflow) && 
+	if ((event.eventtype == MinetEvent::Dataflow) &&
 	    (event.direction == MinetEvent::IN)) {
-	
+
 	    if (event.handle == mux) {
 		// ip packet has arrived!
 	    }
