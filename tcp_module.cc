@@ -262,14 +262,74 @@ int main(int argc, char * argv[]) {
 	     if ((event.eventtype == MinetEvent::Dataflow) &&
 	         (event.direction == MinetEvent::IN)) {
 
-	     if (event.handle == mux) {
-		      // ip packet has arrived! (PASSIVE DATAFLOW)
-          handlePacket(connection, getPacket(&mux));
-	     }
+	    if (event.handle == mux) {
+		    // ip packet has arrived!
+            Packet p;
+            unsigned short len;
+            bool checksumok;
+            MinetReceive(mux, p);
+            std::cout << p << std::endl;        //DEBUGGING
+            TCPHeader tcph = p.PopBackHeader();
+            std::cout << tcph << std::endl;    //DEBUGGING
+            checksumok = tcph.IsCorrectChecksum(p);
+            IPHeader iph = p.PopFrontHeader();
+            std::cout << iph << std::endl;     //DEBUGGING
+            Connection c;
+            // note that this is flipped around because
+            // "source" is interepreted as "this machine"
+            iph.GetDestIP(c.src);
+            iph.GetSourceIP(c.dest);
+            iph.GetProtocol(c.protocol);
+            tcph.GetDestPort(c.srcport);
+            tcph.GetSourcePort(c.destport);
+            ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
+            if (cs != clist.end()) {
+                iph.GetTotalLength(len);
+                unsigned short headLen;
+                tcph.GetHeaderLength(headLen);
+                len -= headLen;
+                Buffer &data = p.GetPayload().ExtractFront(len);
+                SockRequestResponse write(WRITE, (*cs).connection, data, len, EOK);
+                if (!checksumok) {
+                    MinetSendToMonitor(MinetMonitoringEvent("forwarding packet to sock even though checksum failed"));
+                }
+                MinetSend(sock, write);
+            } else {
+                MinetSendToMonitor(MinetMonitoringEvent("Unknown port"));
+            }
+	    }
 
-	     if (event.handle == sock) {
-		      // socket request or response has arrived (APP LAYER REQUEST)
-	     }
+	    if (event.handle == sock) {
+    		// socket request or response has arrived
+            SockRequestResponse req;
+            MinetReceive(sock, req);
+            std::cout << req << std::endl;  //DEBUGGING
+            ConnectionToStateMapping<TCPState> connectstate;
+            Connection c;
+            struct TCPState curr;
+            switch (req.type) {
+                case CONNECT:
+                    //active open to remote
+                    break;
+                case ACCEPT:
+                    //passive open from remote
+                    break;
+                case WRITE:
+                    //send TCP data
+                    ConnectionList<TCPState>::iterator cs = clist.FindMatching(req.connection);
+                    connectstate = *cs;
+                    c = connectstate.connection;
+                    curr = connectstate.state;
+                    break;
+                case FORWARD:
+                    //ignore
+                    break;
+                case CLOSE:
+                    break;
+                case STATUS:
+                    break;
+                default:
+            }
 	    }
 
 	    if (event.eventtype == MinetEvent::Timeout) {
