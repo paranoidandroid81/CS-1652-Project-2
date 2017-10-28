@@ -38,7 +38,7 @@ struct TCPState {
 	     return os;
     }
 
-    private State currentState;
+    State currentState;
 
     MinetHandle sockFD, ipMux;
 
@@ -46,10 +46,34 @@ struct TCPState {
 
     void setStateTo (State newState) { currentState = newState; }
 
-    private int srcPort;
-    private struct IPAddress srcIP;
-    private int destPort;
-    private struct IPAddress destIP;
+    unsigned short srcPort = -1;
+    struct IPAddress srcIP;
+    unsigned short destPort = -1; //Initial invalid value
+     struct IPAddress destIP;
+
+    bool checkPacketSrc (Packet *p) {
+      if (srcPort < 0 || destPort < 0) return false;
+      Header::IPHeader *ipHead = p->PopFrontHeader();
+      Header::TCPHeader *tcpHead = p->PopBackHeader();
+      unsigned short *portCache = calloc(sizeof(unsigned short));
+
+      tcpHead->GetSourcePort(portCache);
+      if (*portCache != srcPort) return false;
+      tcpHead->GetDestPort(portCache);
+      if (*portCache != destPort) return false;
+
+      struct IPAddress * ipCache = calloc(sizeof(IPAddress));
+      ipHead->GetSourceIP(ipCache);
+      if (*ipCache != srcIP) return false;
+      ipHead->GetDestIP(ipCache);
+      if(*ipCache !- destIP) return false;
+      //TODO: Checksums, seq nums, etc.
+
+      //Passed all tests!
+      return true;
+    }
+
+    //Packet inTransit?
 
     State getState () { return currentState; }
 
@@ -64,7 +88,20 @@ bool conductStateTransition (State current, State next, TCPState * connection) {
 }
 
 bool beginTransfer(TCPState * connection, Packet pkt) {
+  // SetSourcePort(&(connection->srcPort), pkt);
+  // SetDestPort(&(connection->destPort), pkt);
+  //Officially enter data transfer state
+  //Send ack first!
+}
 
+bool concludeHandshake(TCPState * connection, Packet pkt) {
+  //Send ack! wait for data transfer
+  Packet p;
+  unsigned short len;
+  bool checksumok;
+  MinetReceive(connection->ipMux, p);
+  p.ExtractHeaderFromPayload<TCPHeader>(8); //Why 8? This might need to change
+  TCPHeader tcph;
 }
 
 bool parsePacket () {
@@ -79,10 +116,12 @@ Packet getPacket (const MinetHandle &handle) {
 
 bool resetHandshake (TCPState * connection, Packet pkt) {
   //received reset, set handshake back to original state
+  connection->setStateTo()
+
 }
 
 bool sendSynAck (TCPState * connection, Packet pkt) {
-
+  //Store IP info? Or do this at begin connection
 }
 
 bool transferData(TCPState * connection, Packet pkt) {
@@ -96,44 +135,58 @@ bool closeWait (TCPState * connection, Packet pkt) {
  bool handlePacket (TCPState * connection, Packet pkt) {
   //Responds to an IP event based on the packet type and current connection state
   State current = connection->getState();
+  //Get header from packet
+  Header::IPHeader ipHead = pkt.PopFrontHeader();
+  Header::TCPHeader tcpHead = pkt.PopBackHeader();
+
+  char l;
+  int headlen = tcpHead.GetHeaderLen(&l);
+  unsigned char *flags = malloc(l);
+  tcpHead.GetFlags(flags);
 
   switch (current) {
 
     case (LISTEN) {
-      return IS_SYN(pkt) ? sendSynAck(connection, pkt) : false;
+      return IS_SYN(flags) ? sendSynAck(connection, pkt) : false;
     }
 
     case (SYN_RCVD) {
-      if (IS_ACK(pkt)) return beginTransfer(connection, pkt);
-      else if (IS_RST(pkt)) return resetHandshake(connection, pkt);
+      if (IS_ACK(flags)) return beginTransfer(connection, pkt);
+      else if (IS_RST(flags)) return resetHandshake(connection, pkt);
       else return false;
     }
 
     case (SYN_SENT) {
-      if (IS_SYN(pkt)) { return IS_ACK(pkt) ? beginTransfer(connection, pkt) : sendSynAck(connection, pkt); }
+      if (IS_SYN(flags)) { return IS_ACK(flags) ? concludeHandshake(connection, pkt) : sendSynAck(connection, pkt); }
       else return false;
     }
     case (ESTABLISHED) {
-      return IS_FIN(pkt) ? closeWait(connection, pkt) : transferData(connnection, pkt);
+      return IS_FIN(flags) ? closeWait(connection, pkt) : transferData(connnection, pkt);
     }
 
     case (FIN_WAIT_1) {
-     return IS_FIN(pkt) ? (IS_ACK(pkt) ? timeWait(connection, pkt) : initiateClose(connection, pkt)) : (IS_ACK(pkt) ? finWait2(connection, pkt) : false);
+     return IS_FIN(flags) ? (IS_ACK(flags) ? timeWait(connection, pkt) : initiateClose(connection, pkt)) : (IS_ACK(flags) ? finWait2(connection, pkt) : false);
     }
 
     case (FIN_WAIT_2) {
-      return IS_FIN(pkt) ? timeWait(connection, pkt) : false;
+      return IS_FIN(flags) ? timeWait(connection, pkt) : false;
     }
 
     case (CLOSING) {
-      return IS_ACK(pkt) ? timeWait(connection, pkt) : false;
+      return IS_ACK(flags) ? timeWait(connection, pkt) : false;
     }
 
     default { return false; }
 
     }
   }
+
+
+bool handleAppRequest(TCPState * connection, MinetHandle * sock) {
+  //TODO: Handle app requests!!! (TCP-Socket layer interface)
+  return false;
 }
+
 
 bool listen(TCPState * connection, MinetHandle * ipmux, MinetHandle * minSock) {
   //Waits to receive syn or be asked to send data, sends syn-ack to client
@@ -206,22 +259,22 @@ int main(int argc, char * argv[]) {
 
     while (MinetGetNextEvent(event, timeout) == 0) {
 
-	if ((event.eventtype == MinetEvent::Dataflow) &&
-	    (event.direction == MinetEvent::IN)) {
+	     if ((event.eventtype == MinetEvent::Dataflow) &&
+	         (event.direction == MinetEvent::IN)) {
 
-	    if (event.handle == mux) {
+	     if (event.handle == mux) {
 		      // ip packet has arrived! (PASSIVE DATAFLOW)
           handlePacket(connection, getPacket(&mux));
-	    }
+	     }
 
-	    if (event.handle == sock) {
+	     if (event.handle == sock) {
 		      // socket request or response has arrived (APP LAYER REQUEST)
+	     }
 	    }
-	}
 
-	if (event.eventtype == MinetEvent::Timeout) {
+	    if (event.eventtype == MinetEvent::Timeout) {
 	    // timeout ! probably need to resend some packets
-	}
+	    }
 
     }
 
