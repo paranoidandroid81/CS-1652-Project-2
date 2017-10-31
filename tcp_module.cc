@@ -25,13 +25,12 @@
 #include "ip.h"
 #include "tcp.h"
 #include "packet.h"
+#include "tcpstate.h"
 
 using namespace std;
 
-enum State = {CLOSED, LISTEN, SYN_RCVD, SYN_SENT, ESTABLISHED, CLOSE_WAIT,
-LAST_ACK, FIN_WAIT_1, FIN_WAIT_2, CLOSING, TIME_WAIT};
 
-struct TCPState {
+/*struct TCPState {
     // need to write this
     std::ostream & Print(std::ostream &os) const {
 	     os << "TCPState()" ;
@@ -89,7 +88,7 @@ bool conductStateTransition (State current, State next, TCPState * connection) {
 
 bool beginTransfer(TCPState * connection, Packet pkt) {
   // SetSourcePort(&(connection->srcPort), pkt);
-  // SetDestPort(&(connection->destPort), pkt);
+  // SetDestPort(&(connection->destPort), pktIP);
   //Officially enter data transfer state
   //Send ack first!
 }
@@ -213,7 +212,7 @@ bool passiveOpen (TCPState * connection, MinetHandle * ipmux, MinetHandle * sock
 
 bool receiveSyn(TCPState * connection, MinetHandle * ipmux) {
 
-}
+} */ //TODO: Fix all
 
 
 int main(int argc, char * argv[]) {
@@ -268,12 +267,11 @@ int main(int argc, char * argv[]) {
             unsigned short len;
             bool checksumok;
             MinetReceive(mux, p);
-            std::cout << p << std::endl;        //DEBUGGING
+            cerr << "Packet: " << endl;  //DEBUGGING
+            cerr << p << endl;          //DEBUGGING
             TCPHeader tcph = p.PopBackHeader();
-            std::cout << tcph << std::endl;    //DEBUGGING
             checksumok = tcph.IsCorrectChecksum(p);
             IPHeader iph = p.PopFrontHeader();
-            std::cout << iph << std::endl;     //DEBUGGING
             Connection c;
             // note that this is flipped around because
             // "source" is interepreted as "this machine"
@@ -285,8 +283,8 @@ int main(int argc, char * argv[]) {
             ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
             if (cs != clist.end()) {
                 iph.GetTotalLength(len);
-                unsigned short headLen;
-                tcph.GetHeaderLength(headLen);
+                unsigned char headLen;
+                tcph.GetHeaderLen(headLen);
                 len -= headLen;
                 Buffer &data = p.GetPayload().ExtractFront(len);
                 SockRequestResponse write(WRITE, (*cs).connection, data, len, EOK);
@@ -303,32 +301,47 @@ int main(int argc, char * argv[]) {
     		// socket request or response has arrived
             SockRequestResponse req;
             MinetReceive(sock, req);
-            std::cout << req << std::endl;  //DEBUGGING
+            cerr << "Sock request: " << endl;           //DEBUGGING
+            cerr << req << endl;         //DEBUGGING
             ConnectionToStateMapping<TCPState> connectstate;
             Connection c;
-            struct TCPState curr;
+            TCPState curr;
             switch (req.type) {
                 case CONNECT:
+                {
                     //active open to remote
                     break;
+                }
                 case ACCEPT:
+                {
                     //passive open from remote
                     break;
+                }
                 case WRITE:
+                {
                     //send TCP data
                     ConnectionList<TCPState>::iterator cs = clist.FindMatching(req.connection);
                     connectstate = *cs;
                     c = connectstate.connection;
                     curr = connectstate.state;
                     break;
+                }
                 case FORWARD:
+                {
                     //ignore
                     break;
+                }
                 case CLOSE:
+                {
                     break;
+                }
                 case STATUS:
+                {
                     break;
+                }
                 default:
+                {
+                }
             }
 	    }
 
@@ -338,7 +351,10 @@ int main(int argc, char * argv[]) {
 
     }
 
+    }
+
     MinetDeinit();
 
     return 0;
+
 }
