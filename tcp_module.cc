@@ -214,6 +214,23 @@ bool receiveSyn(TCPState * connection, MinetHandle * ipmux) {
 
 } */ //TODO: Fix all
 
+Packet makePacket(SockRequestResponse r) {
+    unsigned bytes = MIN_MACRO(TCP_MAXIMUM_SEGMENT_SIZE, r.data.GetSize());
+    Packet pack(r.data.ExtractFront(bytes));
+    IPHeader ih;
+    ih.SetProtocol(IP_PROTO_TCP);
+    ih.SetSourceIP(r.connection.src);
+    ih.SetDestIP(r.connection.dest);
+    ih.SetTotalLength(bytes+TCP_HEADER_BASE_LENGTH+IP_HEADER_BASE_LENGTH);
+    pack.PushFrontHeader(ih);
+    TCPHeader th;
+    th.SetSourcePort(r.connection.srcport, pack);
+    th.SetDestPort(r.connection.destport, pack);
+    th.SetLength(TCP_HEADER_BASE_LENGTH+bytes, pack);
+    pack.PushBackHeader(th);
+    return pack;
+}
+
 
 int main(int argc, char * argv[]) {
     MinetHandle mux;
