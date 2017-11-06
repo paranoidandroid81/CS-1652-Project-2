@@ -24,155 +24,229 @@
 #include "Minet.h"
 #include "ip.h"
 #include "tcp.h"
+#include "tcpstate.h"
+#include "constate.h"
 #include "packet.h"
 #include "tcpstate.h"
 
 using namespace std;
 
 
-/*struct TCPState {
-    // need to write this
-    std::ostream & Print(std::ostream &os) const {
-	     os << "TCPState()" ;
-	     return os;
-    }
+enum TCPFlags = {ACK, SYN, FIN, RST};
 
-    State currentState;
-
-    MinetHandle sockFD, ipMux;
-
-    bool isInState (State check) { return check == currentState; }
-
-    void setStateTo (State newState) { currentState = newState; }
-
-    unsigned short srcPort = -1;
-    struct IPAddress srcIP;
-    unsigned short destPort = -1; //Initial invalid value
-     struct IPAddress destIP;
-
-    bool checkPacketSrc (Packet *p) {
-      if (srcPort < 0 || destPort < 0) return false;
-      Header::IPHeader *ipHead = p->PopFrontHeader();
-      Header::TCPHeader *tcpHead = p->PopBackHeader();
-      unsigned short *portCache = calloc(sizeof(unsigned short));
-
-      tcpHead->GetSourcePort(portCache);
-      if (*portCache != srcPort) return false;
-      tcpHead->GetDestPort(portCache);
-      if (*portCache != destPort) return false;
-
-      struct IPAddress * ipCache = calloc(sizeof(IPAddress));
-      ipHead->GetSourceIP(ipCache);
-      if (*ipCache != srcIP) return false;
-      ipHead->GetDestIP(ipCache);
-      if(*ipCache !- destIP) return false;
-      //TODO: Checksums, seq nums, etc.
-
-      //Passed all tests!
-      return true;
-    }
-
-    //Packet inTransit?
-
-    State getState () { return currentState; }
-
-};
-
-bool conductStateTransition (State current, State next, TCPState * connection) {
-  if (!connection->isInState(current)) return false;
-  else {
-    connection->setStateTo(next);
-    return true;
-  }
+bool conductStateTransition (int current, int next, TCPState * fsm) {
+  if (!(fsm->GetState() == current)) return false;
+  else fsm->setState(next);
+  return true;
 }
 
-bool beginTransfer(TCPState * connection, Packet pkt) {
-  // SetSourcePort(&(connection->srcPort), pkt);
-  // SetDestPort(&(connection->destPort), pktIP);
+bool beginTransfer(TCPState * fsm, Packet pkt) {
+  // SetSourcePort(&(fsm->srcPort), pkt);
+  // SetDestPort(&(fsm->destPort), pkt);
   //Officially enter data transfer state
   //Send ack first!
 }
 
-bool concludeHandshake(TCPState * connection, Packet pkt) {
+bool concludeHandshake(TCPState * fsm, Packet *pkt) {
   //Send ack! wait for data transfer
   Packet p;
   unsigned short len;
   bool checksumok;
-  MinetReceive(connection->ipMux, p);
-  p.ExtractHeaderFromPayload<TCPHeader>(8); //Why 8? This might need to change
+  MinetReceive(fsm->ipMux, p); //TODO fix this!
+  p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
   TCPHeader tcph;
 }
 
-bool parsePacket () {
+//parses pkt headers and returns a connection
+Connection getConnection (Header::TCPHeader * tcpHead, Header::IPHeader ipHead) {
+    IPAddress* srcIP, destIP;
+    ipHead->GetSourceIP(srcIP);
+    ipHead->GetDestIP(destIP);
 
+    unsigned int srcPort, destPort;
+    tcpHead->getSrcPort(&srcPort);
+    tcpHead->getDestPort(&destPort);
+
+    return Connection(srcIP, destIP, srcPort, destPort, 0); //TODO protocol var is wrong!
 }
 
-Packet getPacket (const MinetHandle &handle) {
+Packet getPacket (int handle) {
   Packet * pk = calloc(sizeof(Packet));
-  if (MinetReceive(handle, pk) > 0) return pk;
+  if (MinetReceive(&handle, pk) > 0) return pk;
   else return NULL; //throw error here?
 }
 
-bool resetHandshake (TCPState * connection, Packet pkt) {
+bool resetHandshake (TCPState * fsm, Packet pkt) {
   //received reset, set handshake back to original state
-  connection->setStateTo()
+
 
 }
 
-bool sendSynAck (TCPState * connection, Packet pkt) {
-  //Store IP info? Or do this at begin connection
+bool sendSynAck (TCPState * fsm, Packet pkt) {
+  //Store IP info? Or do this at begin fsm
 }
 
-bool transferData(TCPState * connection, Packet pkt) {
-
-}
-
-bool closeWait (TCPState * connection, Packet pkt) {
+bool transferData(TCPState * fsm, Packet pkt) {
 
 }
 
- bool handlePacket (TCPState * connection, Packet pkt) {
-  //Responds to an IP event based on the packet type and current connection state
-  State current = connection->getState();
+bool closeWait (TCPState * fsm, Packet pkt) {
+
+}
+
+bool handleTimeout (TCPState * fsm, Packet pkt) {
+
+}
+
+bool startHandshake (Connection c) {
+  Packet p;
+  char flags = 0;
+  SET_ACK(&flags);
+  SET_SYN(&flags);
+  TCPHeader tcph = TCPHead();
+}
+
+bool passiveOpen (Packet *p, ConnectionList<TCPState> clist) {
+  //recvd syn, send syn-ack
+  TCPHeader tcph = p->popBackHeader();
+  IPHeader iph = p->popFrontHeader();
+  Connection newConn = getConnection(tcph, iph);
+  clist.push_back(newConn);
+  //Send syn-ack
+  char flags = 0;
+  SET_SYN(&flags);
+  SET_ACK(&flags);
+  int n;
+  tcph.GetSeqNum(&n);
+  //Check if pkt is ok!
+  TCPHeader resp_tcph;
+  resp_tcph.SetSeqNum();
+
+}
+
+Connection getConnection (TCPHeader tchp, IPHeader iph) {
+  Connection c;
+  iph.GetDestIP(c.src);
+  iph.GetSourceIP(c.dest);
+  iph.GetProtocol(c.protocol);
+  tcph.GetDestPort(c.srcport);
+  tcph.GetSourcePort(c.destport);
+  return c;
+}
+
+Packet makeAck (Packet *pkt, TCPState connstate) {
+  TCPHeader tcph = pkt->popBackHeader();
+  IPHeader iph = pkt->popFrontHeader();
+  bool checksumok = tcph.IsCorrectChecksum(p);
+
+  int acknum;
+  TCPHeader resp_tcph = TCPHeader();
+  IPHeader resp_iph = IPHeader();
+  Packet response;
+
+  if (!checksumok) acknum = connstate.GetLastAcked(); //Ack last packet!
+  else {
+    int n;
+    tcph.GetSeqNum(&n);
+    acknum = ( n == 0 ? 1 : 0); //Non pipelined, only need 2 seq. nums
+  }
+
+
+  resp_iph.SetSourceIP(iph.GetDestIP());
+  resp_iph.SetDestIP(iph.GetSourceIP());
+  resp_iph.SetProtocol(IP_PROTO_TCP);
+  resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
+  response.PushFrontHeader(&resp_iph);
+
+  unsigned char flags = 0;
+  SET_ACK(&flags);
+  resp_tcph.SetFlags(&flags, response);
+  resp_tcph.SetSeqNum(&acknum, &response);
+  resp_tcph.SetSourcePort(tcph.GetDestPort());
+  resp_tcph.SetDestPort(tcph.GetSourcePort());
+  resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
+  response.PushBackHeader(&resp_tcph);
+  return response; //Does it need a buffer?
+}
+
+ bool changeState (Packet *pkt, ConnectionList<TCPState> clist) {
+  //Responds to an IP event based on the packet type and current fsm state
   //Get header from packet
-  Header::IPHeader ipHead = pkt.PopFrontHeader();
-  Header::TCPHeader tcpHead = pkt.PopBackHeader();
+  IPHeader ipHead = pkt->PopFrontHeader();
+  TCPHeader tcpHead = pkt->PopBackHeader();
+  bool checksumok = tcph.IsCorrectChecksum(p);
+  ConnectionList<TCPState>::iterator conn = clist.FindMatching(getConnection(tcpHead, ipHead));
+  int current;
+  if (conn == clist.end()) {
+    conn = NULL;
+    current = 1;
+  }
+  else {
+    TCPState cState = conn.state;
+    current = cState.getState();
+  }
 
+  //Connection pktConn = getConnection (tcpHead, ipHead);
+  //buffer *payload = pkt->GetPayload(); //TODO change functions to take payload/connection not pkt
   char l;
-  int headlen = tcpHead.GetHeaderLen(&l);
+  tcpHead_>GetHeaderLen(&l);
   unsigned char *flags = malloc(l);
-  tcpHead.GetFlags(flags);
+  tcpHead->GetFlags(flags);
 
   switch (current) {
 
-    case (LISTEN) {
-      return IS_SYN(flags) ? sendSynAck(connection, pkt) : false;
+    case (1) { //LISTEN
+      return IS_SYN(flags) ? startHandshake(fsm, pkt) : false;
     }
 
-    case (SYN_RCVD) {
-      if (IS_ACK(flags)) return beginTransfer(connection, pkt);
-      else if (IS_RST(flags)) return resetHandshake(connection, pkt);
+    case (2) { //SYN_RCVD
+      if (IS_ACK(flags)) return beginTransfer(fsm, pkt);
+      else if (IS_RST(flags)) return resetHandshake(fsm, pkt);
       else return false;
     }
 
-    case (SYN_SENT) {
-      if (IS_SYN(flags)) { return IS_ACK(flags) ? concludeHandshake(connection, pkt) : sendSynAck(connection, pkt); }
+    case (3) { //SYN_SENT
+      if (IS_SYN(flags)) return (IS_ACK(flags) ? concludeHandshake(fsm, pkt) : sendSynAck(fsm, pkt));
       else return false;
     }
-    case (ESTABLISHED) {
-      return IS_FIN(flags) ? closeWait(connection, pkt) : transferData(connnection, pkt);
+
+    case (4) { //SYN_SENT1
+      //TODO
+    }
+    case (5) { //ESTABLISHED
+      return IS_FIN(flags) ? closeWait(fsm, pkt) : transferData(connnection, pkt);
+    }
+    case (6) { //SEND_DATA
+      //TODO
+    }
+    case (7){ //CLOSE_WAIT
+      //TODO close wait
     }
 
-    case (FIN_WAIT_1) {
-     return IS_FIN(flags) ? (IS_ACK(flags) ? timeWait(connection, pkt) : initiateClose(connection, pkt)) : (IS_ACK(flags) ? finWait2(connection, pkt) : false);
+    case (8) { //FIN_WAIT1
+     return IS_FIN(flags) ?
+       ( IS_ACK(flags) ?
+           timeWait(fsm, pkt) :
+           initiateClose(fsm, pkt) )
+     :
+       ( IS_ACK(flags) ?
+           finWait2(fsm, pkt) :
+           false );
     }
 
-    case (FIN_WAIT_2) {
-      return IS_FIN(flags) ? timeWait(connection, pkt) : false;
+    case (9) { //CLOSING
+      //TODO
+    }
+    case (10) { //LAST_ACK
+      //TODO
     }
 
-    case (CLOSING) {
-      return IS_ACK(flags) ? timeWait(connection, pkt) : false;
+    case (11) { //FIN_WAIT2
+      return IS_FIN(flags) ? timeWait(fsm, pkt) : false;
+    }
+
+    case (12) { //TIME_WAIT
+      return IS_ACK(flags) ? timeWait(fsm, pkt) : false;
     }
 
     default { return false; }
@@ -181,36 +255,36 @@ bool closeWait (TCPState * connection, Packet pkt) {
   }
 
 
-bool handleAppRequest(TCPState * connection, MinetHandle * sock) {
+bool handleAppRequest(TCPState * fsm, MinetHandle * sock) {
   //TODO: Handle app requests!!! (TCP-Socket layer interface)
   return false;
 }
 
 
-bool listen(TCPState * connection, MinetHandle * ipmux, MinetHandle * minSock) {
+bool listen(TCPState * fsm, MinetHandle * ipmux, MinetHandle * minSock) {
   //Waits to receive syn or be asked to send data, sends syn-ack to client
 
   State deisred = CLOSED;
-  if (!connection->isInState(CLOSED)) return false;
-  else connection->setStateTo(LISTEN);
+  if (!fsm->isInState(CLOSED)) return false;
+  else fsm->setStateTo(LISTEN);
 
 }
 
-bool activeOpen(TCPState * connection) {
-  //Actively opens a connection to a client
-  if ( !(connection->isInState(CLOSED) || connection->isInState(LISTED)) ) return false;
+bool activeOpen(TCPState * fsm) {
+  //Actively opens a fsm to a client
+  if ( !(fsm->isInState(CLOSED) || fsm->isInState(LISTED)) ) return false;
 
 
 }
 
-bool passiveOpen (TCPState * connection, MinetHandle * ipmux, MinetHandle * sock ) {
-  //Passively opens a connection
-  listen(connection, ipmux, );
+bool passiveOpen (TCPState * fsm, MinetHandle * ipmux, MinetHandle * sock ) {
+  //Passively opens a fsm
+  listen(fsm, ipmux, );
 
-  conductStateTransition(CLOSED, LISTEN, connection);
+  conductStateTransition(CLOSED, LISTEN, fsm);
 }
 
-bool receiveSyn(TCPState * connection, MinetHandle * ipmux) {
+bool receiveSyn(TCPState * fsm, MinetHandle * ipmux) {
 
 } */ //TODO: Fix all
 
@@ -236,26 +310,26 @@ int main(int argc, char * argv[]) {
     MinetHandle mux;
     MinetHandle sock;
 
-    ConnectionList<TCPState> clist;
+    ConnectionList<TCPState> clist = ConnectionList<TCPState>();
 
     MinetInit(MINET_TCP_MODULE);
 
 
     //This is a minet handle, call recv to get packets
     mux = MinetIsModuleInConfig(MINET_IP_MUX) ?
-	MinetConnect(MINET_IP_MUX) :
-	MINET_NOHANDLE;
+	  MinetConnect(MINET_IP_MUX) :
+	  MINET_NOHANDLE;
 
     sock = MinetIsModuleInConfig(MINET_SOCK_MODULE) ?
-	MinetAccept(MINET_SOCK_MODULE) :
-	MINET_NOHANDLE;
+	  MinetAccept(MINET_SOCK_MODULE) :
+	  MINET_NOHANDLE;
 
     if ( (mux == MINET_NOHANDLE) &&
-	 (MinetIsModuleInConfig(MINET_IP_MUX)) ) {
+	  (MinetIsModuleInConfig(MINET_IP_MUX)) ) {
 
-	MinetSendToMonitor(MinetMonitoringEvent("Can't connect to ip_mux"));
+	  MinetSendToMonitor(MinetMonitoringEvent("Can't connect to ip_mux"));
 
-	return -1;
+	  return -1;
     }
 
     if ( (sock == MINET_NOHANDLE) &&
@@ -284,6 +358,7 @@ int main(int argc, char * argv[]) {
             unsigned short len;
             bool checksumok;
             MinetReceive(mux, p);
+            changeState(p, clist);
             cerr << "Packet: " << endl;  //DEBUGGING
             cerr << p << endl;          //DEBUGGING
             TCPHeader tcph = p.PopBackHeader();
@@ -298,6 +373,7 @@ int main(int argc, char * argv[]) {
             tcph.GetDestPort(c.srcport);
             tcph.GetSourcePort(c.destport);
             ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
+            changeState(cs.state);
             if (cs != clist.end()) {
                 iph.GetTotalLength(len);
                 unsigned char headLen;
