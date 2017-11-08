@@ -30,17 +30,6 @@
 #include "tcpstate.h"
 
 using namespace std;
-//
-//
-// bool concludeHandshake(TCPState * fsm, Packet *pkt) {
-//   //Send ack! wait for data transfer
-//   Packet p;
-//   unsigned short len;
-//   bool checksumok;
-//   MinetReceive(fsm->ipMux, p); //TODO fix this!
-//   p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
-//   TCPHeader tcph;
-// }
 
 Connection getConnection (TCPHeader tchp, IPHeader iph) {
   Connection c;
@@ -52,43 +41,43 @@ Connection getConnection (TCPHeader tchp, IPHeader iph) {
   return c;
 }
 
-Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
-  TCPHeader tcph = pkt->popBackHeader();
-  IPHeader iph = pkt->popFrontHeader();
-  bool checksumok = tcph.IsCorrectChecksum(p);
-
-  int acknum;
-  TCPHeader resp_tcph = TCPHeader();
-  IPHeader resp_iph = IPHeader();
-  Packet response;
-
-  if (!checksumok) {
-    if (!isSyn) acknum = lastacked; //Ack last packet!
-    else return NULL;
-  }
-  else {
-    int n;
-    tcph.GetSeqNum(&n);
-    acknum = n; //Non pipelined, only need 2 seq. nums
-  }
-
-  resp_iph.SetSourceIP(iph.GetDestIP());
-  resp_iph.SetDestIP(iph.GetSourceIP());
-  resp_iph.SetProtocol(IP_PROTO_TCP);
-  resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
-  response.PushFrontHeader(&resp_iph);
-
-  unsigned char flags = 0;
-  SET_ACK(&flags);
-  if (isSyn) SET_SYN(&flags);
-  resp_tcph.SetFlags(&flags, response);
-  resp_tcph.SetSeqNum(&acknum, &response);
-  resp_tcph.SetSourcePort(tcph.GetDestPort());
-  resp_tcph.SetDestPort(tcph.GetSourcePort());
-  resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
-  response.PushBackHeader(&resp_tcph);
-  return response; //Does it need a buffer?
-}
+// Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
+//   TCPHeader tcph = pkt->popBackHeader();
+//   IPHeader iph = pkt->popFrontHeader();
+//   bool checksumok = tcph.IsCorrectChecksum(p);
+//
+//   int acknum;
+//   TCPHeader resp_tcph = TCPHeader();
+//   IPHeader resp_iph = IPHeader();
+//   Packet response;
+//
+//   if (!checksumok) {
+//     if (!isSyn) acknum = lastacked; //Ack last packet!
+//     else return NULL;
+//   }
+//   else {
+//     int n;
+//     tcph.GetSeqNum(&n);
+//     acknum = n; //Non pipelined, only need 2 seq. nums
+//   }
+//
+//   resp_iph.SetSourceIP(iph.GetDestIP());
+//   resp_iph.SetDestIP(iph.GetSourceIP());
+//   resp_iph.SetProtocol(IP_PROTO_TCP);
+//   resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
+//   response.PushFrontHeader(&resp_iph);
+//
+//   unsigned char flags = 0;
+//   SET_ACK(&flags);
+//   if (isSyn) SET_SYN(&flags);
+//   resp_tcph.SetFlags(&flags, response);
+//   resp_tcph.SetSeqNum(&acknum, &response);
+//   resp_tcph.SetSourcePort(tcph.GetDestPort());
+//   resp_tcph.SetDestPort(tcph.GetSourcePort());
+//   resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
+//   response.PushBackHeader(&resp_tcph);
+//   return response; //Does it need a buffer?
+// }
 
 bool handle_packet (MinetHandle &mux, MinetHandle &sock,
                       ConnectionList<TCPState> clist) {
@@ -273,7 +262,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
           return true;
         }
         Buffer nextPayload = conStateMap->state.SendBuffer.ExtractFront(bytesAcked);
-        stopWaitSend(mux, *conStateMap, nextPayload);
+        int bytesSent = stopWaitSend(mux, *conStateMap, nextPayload);
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout = Time() + 8; //Why 8?
       }
       break;
 
@@ -356,7 +347,6 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
  int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
                   Buffer data) {
       Packet pkt;
-      tcp_csm.state.SendBuffer.AddBack(data); //Move to sock layer!!!
       unsigned int dataSize = min(data.GetSize(), TCP_MAXIMUM_SEGMENT_SIZE);
       // char databuff[sendBytes + 1];
       // int dataSize = data.GetData(databuff, sendBytes, 0); //Is this ok? should i be using sendbuff
@@ -366,6 +356,8 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       cerr << "Sending data at offest " << end << " of size " << dataSize << "\n";
       make_packet(p, tcp_csm, 0, dataSize);
       MinetSend(mux, p);
+      tcp_csm->state.bTmrActive = true;
+      tcp_csm->state.timeout = Time() + 8;
       tcp_csm.state.last_sent += dataSize;
       return sendBytes; //return num bytes sent
  }
@@ -494,7 +486,8 @@ void handleSock(MinetHandle &mux, MinetHandle &sock. ConnectionList<TCPState> &c
                 break;
             }
         }
-    } else {
+    }
+    else {
         cerr << "\nConnection found in the list...\n";
         unsigned int currState;
         currState = cs->state.GetState();
@@ -519,22 +512,33 @@ void handleSock(MinetHandle &mux, MinetHandle &sock. ConnectionList<TCPState> &c
                             repl.bytes = 0;
                             repl.error = EBUF_SPACE;
                             MinetSend(sock, repl);
+                        } else if (cs->state.SendBuffer.GetSize() <= 0) {
+                          //TODO: Send buffer has data!
+                          return false;
                         } else {
                             Buffer buf = req.data;
                             //set timer for write
                             cs->bTmrActive = true;
                             cs->timeout = Time() + 8;
-                            //send it, not timeout
-                            int ret = sendData(mux, *cs, buf, false);
+
+                            //Add data to send buffer and send it!
+                            cs->state->SendBuffer.AddBack(buf);
+                            int ret = stopWaitSend(mux, *cs, buf);
                             cerr << "\nSending this data...\n";
-                            cerr << cs->state.SendBuffer << endl;
+                            cerr << buf << endl;
                             //if success, inform socket
-                            if (ret == 0) {
+                            if (ret != 0) {
                                 repl.type = STATUS;
                                 repl.connection = req.connection;
                                 repl.byte = buf.GetSize();
                                 repl.error = EOK;
                                 MinetSend(sock, repl);
+                                cs->state.SetState(SEND_DATA);
+                            }
+                            else {
+                              //Err, no bytes sent!
+                              cerr < "No bytes sent!"
+                              return false;
                             }
                         }
                 }
