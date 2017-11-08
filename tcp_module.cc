@@ -270,7 +270,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
           conStateMap->state.SetState(ESTABLISHED);
           return true;
         }
-        Buffer &nextPayload(conStateMap->state.SendBuffer);
+        const Buffer &nextPayload(conStateMap->state.SendBuffer);
         if (nextPayload.GetSize() == 0) {
           //All data has been sent!
           conStateMap->state.SetState(ESTABLISHED);
@@ -279,7 +279,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         int bytesSent = stopWaitSend(mux, *conStateMap, nextPayload, false);
         if (bytesSent == 0) {
           //We might have a problem
-          cerr << "Only sent " << bytesSent <<", needed " << min(TCP_MAXIMUM_SEGMENT_SIZE, bytesSent) << endl;
+          cerr << "Didnt send anything" << endl;
           return false;
         }
         conStateMap->bTmrActive = true;
@@ -364,13 +364,11 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
 int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
                   Buffer data, bool isRetrans) {
-      Packet pkt;
+
       unsigned int dataSize = min(data.GetSize(), TCP_MAXIMUM_SEGMENT_SIZE);
-      // char databuff[sendBytes + 1];
-      // int dataSize = data.GetData(databuff, sendBytes, 0); //Is this ok? should i be using sendbuff
-      // Buffer sendBuff;
-      // sendBuff.SetData(databuff, dataSize, 0);
-      pkt(Buffer(data.ExtractFront(dataSize)));
+      const Buffer &buffcopy = data.ExtractFront(dataSize);
+      Packet &pkt(buffcopy);
+
       cerr << " of size " << dataSize << "\n";
       makePacket(pkt, tcp_csm, 0, dataSize, isRetrans);
       MinetSend(mux, pkt);
