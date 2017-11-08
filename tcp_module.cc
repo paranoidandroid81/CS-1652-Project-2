@@ -27,9 +27,20 @@
 #include "tcpstate.h"
 #include "constate.h"
 #include "packet.h"
+#include "tcpstate.h"
 
 using namespace std;
-
+//
+//
+// bool concludeHandshake(TCPState * fsm, Packet *pkt) {
+//   //Send ack! wait for data transfer
+//   Packet p;
+//   unsigned short len;
+//   bool checksumok;
+//   MinetReceive(fsm->ipMux, p); //TODO fix this!
+//   p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
+//   TCPHeader tcph;
+// }
 
 Connection getConnection (TCPHeader tchp, IPHeader iph) {
   Connection c;
@@ -40,59 +51,60 @@ Connection getConnection (TCPHeader tchp, IPHeader iph) {
   tcph.GetSourcePort(c.destport);
   return c;
 }
-// Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
-//   TCPHeader tcph = pkt->popBackHeader();
-//   IPHeader iph = pkt->popFrontHeader();
-//   bool checksumok = tcph.IsCorrectChecksum(p);
-//
-//   int acknum;
-//   TCPHeader resp_tcph = TCPHeader();
-//   IPHeader resp_iph = IPHeader();
-//   Packet response;
-//
-//   if (!checksumok) {
-//     if (!isSyn) acknum = lastacked; //Ack last packet!
-//     else return NULL;
-//   }
-//   else {
-//     int n;
-//     tcph.GetSeqNum(&n);
-//     acknum = n; //Non pipelined, only need 2 seq. nums
-//   }
-//
-//   resp_iph.SetSourceIP(iph.GetDestIP());
-//   resp_iph.SetDestIP(iph.GetSourceIP());
-//   resp_iph.SetProtocol(IP_PROTO_TCP);
-//   resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
-//   response.PushFrontHeader(&resp_iph);
-//
-//   unsigned char flags = 0;
-//   SET_ACK(&flags);
-//   if (isSyn) SET_SYN(&flags);
-//   resp_tcph.SetFlags(&flags, response);
-//   resp_tcph.SetSeqNum(&acknum, &response);
-//   resp_tcph.SetSourcePort(tcph.GetDestPort());
-//   resp_tcph.SetDestPort(tcph.GetSourcePort());
-//   resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
-//   response.PushBackHeader(&resp_tcph);
-//   return response; //Does it need a buffer?
-// }
+
+Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
+  TCPHeader tcph = pkt->popBackHeader();
+  IPHeader iph = pkt->popFrontHeader();
+  bool checksumok = tcph.IsCorrectChecksum(p);
+
+  int acknum;
+  TCPHeader resp_tcph = TCPHeader();
+  IPHeader resp_iph = IPHeader();
+  Packet response;
+
+  if (!checksumok) {
+    if (!isSyn) acknum = lastacked; //Ack last packet!
+    else return NULL;
+  }
+  else {
+    int n;
+    tcph.GetSeqNum(&n);
+    acknum = n; //Non pipelined, only need 2 seq. nums
+  }
+
+  resp_iph.SetSourceIP(iph.GetDestIP());
+  resp_iph.SetDestIP(iph.GetSourceIP());
+  resp_iph.SetProtocol(IP_PROTO_TCP);
+  resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
+  response.PushFrontHeader(&resp_iph);
+
+  unsigned char flags = 0;
+  SET_ACK(&flags);
+  if (isSyn) SET_SYN(&flags);
+  resp_tcph.SetFlags(&flags, response);
+  resp_tcph.SetSeqNum(&acknum, &response);
+  resp_tcph.SetSourcePort(tcph.GetDestPort());
+  resp_tcph.SetDestPort(tcph.GetSourcePort());
+  resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
+  response.PushBackHeader(&resp_tcph);
+  return response; //Does it need a buffer?
+}
 
 bool handle_packet (MinetHandle &mux, MinetHandle &sock,
                       ConnectionList<TCPState> clist) {
   Packet p;
   TCPHeader tcph;
   IPHeader iph;
+  Buffer payLoad;
+  unsigned int currentState;
 
   MinetReceive(mux, p);
-
-  unsigned int tcphLen = TCPHeader::EstimateTCPHeaderLength(p);
-  p.ExtractHeaderFromPayLoad(tcphLen);
-  tcph = p.FindHeader(Headers::TCPHeader);
-  iph = p.FindHeader(Headers::IPHeader);
-
-  bool ischecksumok = tcph.isCorrectChecksum(p);
-  if (!ischecksumok) return false;
+  tcph = p.PopBackHeader(Headers::TCPHeader);
+  if (!tcph.isCorrectChecksum(p)) return false;
+  iph = p.PopFrontHeader(Headers::IPHeader);
+  payload = p.GetPayload();
+  Connection conn = getConnetion(tcph, iph);
+  ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
 
   unsigned char flags;
   unsigned int ack;
@@ -100,7 +112,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   unsigned short winsize;
   unsigned char tcphsize;
   unsigned char iphsize;
-  unsigned short contentsize;
+  unsigned short totalsize;
 
   tcph.GetFlags(flags);
   tcph.GetAckNum(ack);
@@ -108,16 +120,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   tcph.GetWinSize(winsize);
   tcph.GetHeaderLength(tcphsize);
   iph.GetHeaderLength(iphsize);
-  iph.GetTotalLength(contentsize);
-
-  unsigned short payloadsize = contentsize - (tcphsize*4) - (iphsize * 4);
-
-  Buffer payload = p.GetPayload().ExtractFront(payloadsize);
+  iph.GetTotalLength(totalsize);
 
 
-  Connection conn = getConnetion(tcph, iph);
-  ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
-  unsigned int currentState;
   if (conStateMap == clist.end()) {
     //pass
   }
@@ -132,20 +137,22 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
     case (1): //LISTEN
     cerr << "\nLISTEN\n";
       if (IS_SYN(flags)) {
+
         //Update connection-state mapping with iterator
         conStateMap->connection = conn;
         conStateMap->state.SetState(SYN_RCVD);
-        conStateMap->state.last_acked = conStateMap->state.last_sent;
         conStateMap->state.SetLastRecvd(seqnum + 1);
-        conStateMap->bTmrActive = true;
-        conStateMap->timeout=Time() + 8;
-        conStateMap->state.last_sent++;
+        conStateMap->state.last_acked = conStateMap->state.last_sent;
 
         //Send syn-ack
         SET_ACK(rflags);
-        SET_SYN(rflags)
+        SET_SYN(rflags);
         make_packet(response, *(conStateMap), rflags, 0, false);
         MinetSend(mux, response);
+        conStateMap->state.last_sent++;
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout=Time() + 8;
+
       }
       break;
 
@@ -153,16 +160,17 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
     cerr << "\nSYN_RCVD\n";
 
       if (IS_ACK(flags)) {
-        conStateMap->state.setState(ESTABLISHED);
+
+        conStateMap->state.SetState(ESTABLISHED);
         conStateMap->state.SetLastAcked(ack);
         conStateMap->state.SetSendRwnd(winsize);
-        conStateMap->state.last_sent++;
         conStateMap->bTmrActive = false;
+        //conStateMap->state.last_sent++; take out if unneeded
 
         static SockRequestResponse * write = NULL;
         write = new SockRequestResponse(WRITE, conStateMap->connection, payload, 0, EOK);
         MinetSend(sock, *write);
-        delete write;
+        //delete write;
       }
       else if (IS_RST(flags)) {
         //TODO
@@ -175,19 +183,25 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
       if (IS_SYN(flags)) {
         if (IS_ACK(flags)) {
-          conStateMap->state.SetSendRwnd(winsize);
+          conStateMap->bTmrActive = false;
           conStateMap->state.SetLastRecvd(seqnum + 1);
           conStateMap->state.last_acked = ack;
+          conStateMap->state.SetSendRwnd(winsize);
 
-          conStateMap->state.last_sent++;
+          //Send final ack to complete handshake
           SET_ACK(rflags);
-          make_packet(response, *conStateMap, rflags, 0, false);
+          makePacket(response, *conStateMap, rflags, 0, false);
           MinetSend(mux, response);
+          conStateMap->state.last_sent++;
           conStateMap->state.SetState(ESTABLISHED);
-          conStateMap->bTmrActive = false;
 
           SockRequestResponse write (WRITE, conStateMap->connection, payload, 0, EOK);
           MinetSend(sock, write);
+        }
+        else {
+          //Invalid State!!!
+          cerr << "Invalid state!\n";
+          return false;
         }
       }
 
@@ -204,11 +218,11 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(CLOSE_WAIT);
         conStatemap->state.SetLastRecvd(seqnum + 1);
 
-        conStateMap->bTmrActive = true;
-        conStateMap->timeout = Time() + 8;
         SET_ACK(rflags)
         make_packet(response, *conStateMap, rflags, 0, false);
         MinetSend(mux, response);
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout = Time() + 8;
 
         Packet lastack;
         conStateMap->state.SetState(LAST_ACK);
@@ -216,7 +230,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         SET_FIN(rflags);
         make_packet(p, *conStateMap, rflags, 0, false);
       }
-      if (contentsize != 0) {
+      else if (totalsize != 0) {
         conStateMap->state.SetSendRwnd(winsize);
         conStateMap->state.last_recvd = seqnum + payload.GetSize();
         conStateMap->state.RecvBuffer.AddBack(payload);
@@ -232,9 +246,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       if (IS_ACK(flags)) {
 
         if (ack >= conStateMap->state.last_acked) {
-          int amt_ackd = ack - conStateMap->state.last_acked;
+          int bytesAcked = ack - conStateMap->state.last_acked;
           conStateMap->state.last_acked = ack;
-          conStateMap->state.SendBuffer.Erase(0, amount_of_data_acked);
+          conStateMap->state.SendBuffer.Erase(0, bytesAcked);
           conStateMap->bTmrActive = false;
 
         }
@@ -248,7 +262,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
     case (6):  //SEND_DATA
       if (IS_ACK(flags)) {
         unsigned int bytesAcked;
-        if (ack < conStateMap->last_acked) return false; //Bolean check because both are unsigned
+        if (ack < conStateMap->last_acked) return false;
         else bytesAcked = ack - conStateMap.last_acked;
         conStateMap->state.last_acked = ack;
         conStateMap->state.SendBuffer.Erase(0, bytesAcked);
@@ -294,6 +308,10 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(CLOSED);
         clist.erase(conStateMap);
       }
+      else {
+        cerr << "Invalid state!";
+        return false;
+      }
       break;
 
     case (11) : //FIN_WAIT2
@@ -303,12 +321,16 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(TIME_WAIT);
         conStateMap->state.SetLastRecvd(seqnum + 1);
         SET_ACK(rflags);
-        make_packet(response, *conStateMap, rflags, 0, false);
+        make_packet(response, *conStateMap, rflags, 0);
 
         conStateMap->bTmrActive = true;
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
         MinetSend(mux, response);
 
+      }
+      else {
+        cerr << "invalid state !";
+        return false;
       }
       break;
 
@@ -319,7 +341,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetLastRecvd(seqnum+1);
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
         SET_ACK(rflags);
-        make_packet(response, *conStateMap, rflags, 0, false);
+        make_packet(response, *conStateMap, rflags, 0);
         MinetSend(mux, response);
       }
       break;
@@ -646,9 +668,9 @@ int main(int argc, char * argv[]) {
 	return -1;
     }
 
-    cerr << "tcp_module stop and wait handling tcp traffic.......\n";
+    cerr << "tcp_module STUB VERSION handling tcp traffic.......\n";
 
-    MinetSendToMonitor(MinetMonitoringEvent("tcp_module stop and waithandling tcp traffic........"));
+    MinetSendToMonitor(MinetMonitoringEvent("tcp_module STUB VERSION handling tcp traffic........"));
 
     MinetEvent event;
     double timeout = 1;
@@ -658,36 +680,100 @@ int main(int argc, char * argv[]) {
 	     if ((event.eventtype == MinetEvent::Dataflow) &&
 	         (event.direction == MinetEvent::IN)) {
 
-             cerr << "\nMinet event arriving...\n";
-	         if (event.handle == mux) {
-                 cerr << "\nTCP mux packet has arrived!\n";
-    		     // ip packet has arrived!
-                 handle_packet(mux, sock, clist);
-             }
+	    if (event.handle == mux) {
+		    // ip packet has arrived!
+            Packet p;
+            unsigned short len;
+            bool checksumok;
+            MinetReceive(mux, p);
+            changeState(p, clist);
+            cerr << "Packet: " << endl;  //DEBUGGING
+            cerr << p << endl;          //DEBUGGING
+            TCPHeader tcph = p.PopBackHeader();
+            checksumok = tcph.IsCorrectChecksum(p);
+            IPHeader iph = p.PopFrontHeader();
+            Connection c;
+            // note that this is flipped around because
+            // "source" is interepreted as "this machine"
+            iph.GetDestIP(c.src);
+            iph.GetSourceIP(c.dest);
+            iph.GetProtocol(c.protocol);
+            tcph.GetDestPort(c.srcport);
+            tcph.GetSourcePort(c.destport);
+            ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
+            changeState(cs.state);
+            handlePacket(mux, sock, clist);
+            if (cs != clist.end()) {
+                iph.GetTotalLength(len);
+                unsigned char headLen;
+                tcph.GetHeaderLen(headLen);
+                len -= headLen;
+                Buffer &data = p.GetPayload().ExtractFront(len);
+                SockRequestResponse write(WRITE, (*cs).connection, data, len, EOK);
+                if (!checksumok) {
+                    MinetSendToMonitor(MinetMonitoringEvent("forwarding packet to sock even though checksum failed"));
+                }
+                MinetSend(sock, write);
+            } else {
+                MinetSendToMonitor(MinetMonitoringEvent("Unknown port"));
+            }
+	    }
 
-    	     if (event.handle == sock) {
-        		 // socket request or response has arrived
-                 cerr << "\nTCP sock req or resp arrived!\n";
-                 handle_sock(mux, sock, clist);
-    	     }
-         }
+	    if (event.handle == sock) {
+    		// socket request or response has arrived
+            SockRequestResponse req;
+            MinetReceive(sock, req);
+            cerr << "Sock request: " << endl;           //DEBUGGING
+            cerr << req << endl;         //DEBUGGING
+            ConnectionToStateMapping<TCPState> connectstate;
+            Connection c;
+            TCPState curr;
+            switch (req.type) {
+                case CONNECT:
+                {
+                    //active open to remote
+                    break;
+                }
+                case ACCEPT:
+                {
+                    //passive open from remote
+                    break;
+                }
+                case WRITE:
+                {
+                    //send TCP data
+                    ConnectionList<TCPState>::iterator cs = clist.FindMatching(req.connection);
+                    connectstate = *cs;
+                    c = connectstate.connection;
+                    curr = connectstate.state;
+                    break;
+                }
+                case FORWARD:
+                {
+                    //ignore
+                    break;
+                }
+                case CLOSE:
+                {
+                    break;
+                }
+                case STATUS:
+                {
+                    break;
+                }
+                default:
+                {
+                }
+            }
+	    }
 
-    	 if (event.eventtype == MinetEvent::Timeout) {
-    	     // timeout ! probably need to resend some packets
-             //find earliest conn
-             ConnectionList<TCPState>::iterator cs = clist.FindEarliest();
-
-             if (cs != clist.end()) {
-                 if (Time().operator > ((*cs).timeout)) {
-                      handle_timout(mux, cs, clist);
-                 }
-             }
-
-    	 }
+	    if (event.eventtype == MinetEvent::Timeout) {
+	    // timeout ! probably need to resend some packets
+	    }
 
     }
 
-
+    }
 
     MinetDeinit();
 
