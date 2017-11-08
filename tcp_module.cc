@@ -30,99 +30,17 @@
 #include "tcpstate.h"
 
 using namespace std;
-
-
-enum TCPFlags = {ACK, SYN, FIN, RST};
-
-bool conductStateTransition (int current, int next, TCPState * fsm) {
-  if (!(fsm->GetState() == current)) return false;
-  else fsm->setState(next);
-  return true;
-}
-
-bool beginTransfer(TCPState * fsm, Packet pkt) {
-  // SetSourcePort(&(fsm->srcPort), pkt);
-  // SetDestPort(&(fsm->destPort), pkt);
-  //Officially enter data transfer state
-  //Send ack first!
-}
-
-bool concludeHandshake(TCPState * fsm, Packet *pkt) {
-  //Send ack! wait for data transfer
-  Packet p;
-  unsigned short len;
-  bool checksumok;
-  MinetReceive(fsm->ipMux, p); //TODO fix this!
-  p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
-  TCPHeader tcph;
-}
-
-//parses pkt headers and returns a connection
-Connection getConnection (Header::TCPHeader * tcpHead, Header::IPHeader ipHead) {
-    IPAddress* srcIP, destIP;
-    ipHead->GetSourceIP(srcIP);
-    ipHead->GetDestIP(destIP);
-
-    unsigned int srcPort, destPort;
-    tcpHead->getSrcPort(&srcPort);
-    tcpHead->getDestPort(&destPort);
-
-    return Connection(srcIP, destIP, srcPort, destPort, 0); //TODO protocol var is wrong!
-}
-
-Packet getPacket (int handle) {
-  Packet * pk = calloc(sizeof(Packet));
-  if (MinetReceive(&handle, pk) > 0) return pk;
-  else return NULL; //throw error here?
-}
-
-bool resetHandshake (TCPState * fsm, Packet pkt) {
-  //received reset, set handshake back to original state
-
-
-}
-
-bool sendSynAck (TCPState * fsm, Packet pkt) {
-  //Store IP info? Or do this at begin fsm
-}
-
-bool transferData(TCPState * fsm, Packet pkt) {
-
-}
-
-bool closeWait (TCPState * fsm, Packet pkt) {
-
-}
-
-bool handleTimeout (TCPState * fsm, Packet pkt) {
-
-}
-
-bool startHandshake (Connection c) {
-  Packet p;
-  char flags = 0;
-  SET_ACK(&flags);
-  SET_SYN(&flags);
-  TCPHeader tcph = TCPHead();
-}
-
-bool passiveOpen (Packet *p, ConnectionList<TCPState> clist) {
-  //recvd syn, send syn-ack
-  TCPHeader tcph = p->popBackHeader();
-  IPHeader iph = p->popFrontHeader();
-  Connection newConn = getConnection(tcph, iph);
-  clist.push_back(newConn);
-  //Send syn-ack
-  char flags = 0;
-  SET_SYN(&flags);
-  SET_ACK(&flags);
-  int n;
-  tcph.GetSeqNum(&n);
-  //Check if pkt is ok!
-  TCPHeader resp_tcph;
-  resp_tcph.SetSeqNum();
-
-}
+//
+//
+// bool concludeHandshake(TCPState * fsm, Packet *pkt) {
+//   //Send ack! wait for data transfer
+//   Packet p;
+//   unsigned short len;
+//   bool checksumok;
+//   MinetReceive(fsm->ipMux, p); //TODO fix this!
+//   p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
+//   TCPHeader tcph;
+// }
 
 Connection getConnection (TCPHeader tchp, IPHeader iph) {
   Connection c;
@@ -134,7 +52,7 @@ Connection getConnection (TCPHeader tchp, IPHeader iph) {
   return c;
 }
 
-Packet makeAck (Packet *pkt, TCPState connstate) {
+Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
   TCPHeader tcph = pkt->popBackHeader();
   IPHeader iph = pkt->popFrontHeader();
   bool checksumok = tcph.IsCorrectChecksum(p);
@@ -144,13 +62,15 @@ Packet makeAck (Packet *pkt, TCPState connstate) {
   IPHeader resp_iph = IPHeader();
   Packet response;
 
-  if (!checksumok) acknum = connstate.GetLastAcked(); //Ack last packet!
+  if (!checksumok) {
+    if (!isSyn) acknum = lastacked; //Ack last packet!
+    else return NULL;
+  }
   else {
     int n;
     tcph.GetSeqNum(&n);
-    acknum = ( n == 0 ? 1 : 0); //Non pipelined, only need 2 seq. nums
+    acknum = n; //Non pipelined, only need 2 seq. nums
   }
-
 
   resp_iph.SetSourceIP(iph.GetDestIP());
   resp_iph.SetDestIP(iph.GetSourceIP());
@@ -160,6 +80,7 @@ Packet makeAck (Packet *pkt, TCPState connstate) {
 
   unsigned char flags = 0;
   SET_ACK(&flags);
+  if (isSyn) SET_SYN(&flags);
   resp_tcph.SetFlags(&flags, response);
   resp_tcph.SetSeqNum(&acknum, &response);
   resp_tcph.SetSourcePort(tcph.GetDestPort());
@@ -169,90 +90,275 @@ Packet makeAck (Packet *pkt, TCPState connstate) {
   return response; //Does it need a buffer?
 }
 
- bool changeState (Packet *pkt, ConnectionList<TCPState> clist) {
-  //Responds to an IP event based on the packet type and current fsm state
-  //Get header from packet
-  IPHeader ipHead = pkt->PopFrontHeader();
-  TCPHeader tcpHead = pkt->PopBackHeader();
-  bool checksumok = tcph.IsCorrectChecksum(p);
-  ConnectionList<TCPState>::iterator conn = clist.FindMatching(getConnection(tcpHead, ipHead));
-  int current;
-  if (conn == clist.end()) {
-    conn = NULL;
-    current = 1;
-  }
-  else {
-    TCPState cState = conn.state;
-    current = cState.getState();
+bool handle_packet (MinetHandle &mux, MinetHandle &sock,
+                      ConnectionList<TCPState> clist) {
+  Packet p;
+  TCPHeader tcph;
+  IPHeader iph;
+
+  MinetReceive(mux, p);
+
+  unsigned int tcphLen = TCPHeader::EstimateTCPHeaderLength(p);
+  p.ExtractHeaderFromPayLoad(tcphLen);
+  tcph = p.FindHeader(Headers::TCPHeader);
+  iph = p.FindHeader(Headers::IPHeader);
+
+  bool ischecksumok = tcph.isCorrectChecksum(p);
+  if (!ischecksumok) return false;
+
+  unsigned char flags;
+  unsigned int ack;
+  unsigned int seqnum;
+  unsigned short winsize;
+  unsigned char tcphsize;
+  unsigned char iphsize;
+  unsigned short contentsize;
+
+  tcph.GetFlags(flags);
+  tcph.GetAckNum(ack);
+  tcph.GetSeqNum(seqnum);
+  tcph.GetWinSize(winsize);
+  tcph.GetHeaderLength(tcphsize);
+  iph.GetHeaderLength(iphsize);
+  iph.GetTotalLength(contentsize);
+
+  unsigned short payloadsize = contentsize - (tcphsize*4) - (iphsize * 4);
+
+  Buffer payload = p.GetPayload().ExtractFront(payloadsize);
+
+
+  Connection conn = getConnetion(tcph, iph);
+  ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
+  unsigned int currentState;
+  if (conStateMap == clist.end()) {
+    //pass
   }
 
-  //Connection pktConn = getConnection (tcpHead, ipHead);
-  //buffer *payload = pkt->GetPayload(); //TODO change functions to take payload/connection not pkt
-  char l;
-  tcpHead_>GetHeaderLen(&l);
-  unsigned char *flags = malloc(l);
-  tcpHead->GetFlags(flags);
+  currentState = conStateMap->state.GetState();
+  Packet response;
+  unsigned char rflags = 0;
+
 
   switch (current) {
 
-    case (1) { //LISTEN
-      return IS_SYN(flags) ? startHandshake(fsm, pkt) : false;
-    }
+    case (1): //LISTEN
+    cerr << "\nLISTEN\n";
+      if (IS_SYN(flags)) {
+        //Update connection-state mapping with iterator
+        conStateMap->connection = conn;
+        conStateMap->state.SetState(SYN_RCVD);
+        conStateMap->state.last_acked = conStateMap->state.last_sent;
+        conStateMap->state.SetLastRecvd(seqnum + 1);
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout=Time() + 8;
+        conStateMap->state.last_sent++;
 
-    case (2) { //SYN_RCVD
-      if (IS_ACK(flags)) return beginTransfer(fsm, pkt);
-      else if (IS_RST(flags)) return resetHandshake(fsm, pkt);
+        //Send syn-ack
+        SET_ACK(rflags);
+        SET_SYN(rflags)
+        make_packet(response, *(conStateMap), rflags, 0, false);
+        MinetSend(mux, response);
+      }
+      break;
+
+    case (2): //SYN_RCVD
+    cerr << "\nSYN_RCVD\n";
+
+      if (IS_ACK(flags)) {
+        conStateMap->state.setState(ESTABLISHED);
+        conStateMap->state.SetLastAcked(ack);
+        conStateMap->state.SetSendRwnd(winsize);
+        conStateMap->state.last_sent++;
+        conStateMap->bTmrActive = false;
+
+        static SockRequestResponse * write = NULL;
+        write = new SockRequestResponse(WRITE, conStateMap->connection, payload, 0, EOK);
+        MinetSend(sock, *write);
+        delete write;
+      }
+      else if (IS_RST(flags)) {
+        //TODO
+      };
       else return false;
-    }
+      break;
 
-    case (3) { //SYN_SENT
-      if (IS_SYN(flags)) return (IS_ACK(flags) ? concludeHandshake(fsm, pkt) : sendSynAck(fsm, pkt));
-      else return false;
-    }
+    case (3):  //SYN_SENT
+    cerr << "\nSYN_SENT\n";
 
-    case (4) { //SYN_SENT1
+      if (IS_SYN(flags)) {
+        if (IS_ACK(flags)) {
+          conStateMap->state.SetSendRwnd(winsize);
+          conStateMap->state.SetLastRecvd(seqnum + 1);
+          conStateMap->state.last_acked = ack;
+
+          conStateMap->state.last_sent++;
+          SET_ACK(rflags);
+          make_packet(response, *conStateMap, rflags, 0, false);
+          MinetSend(mux, response);
+          conStateMap->state.SetState(ESTABLISHED);
+          conStateMap->bTmrActive = false;
+
+          SockRequestResponse write (WRITE, conStateMap->connection, payload, 0, EOK);
+          MinetSend(sock, write);
+        }
+      }
+
+      break;
+
+    case (4):  //SYN_SENT1
       //TODO
-    }
-    case (5) { //ESTABLISHED
-      return IS_FIN(flags) ? closeWait(fsm, pkt) : transferData(connnection, pkt);
-    }
-    case (6) { //SEND_DATA
-      //TODO
-    }
-    case (7){ //CLOSE_WAIT
+      break;
+
+    case (5):  //ESTABLISHED
+    cerr << "\nESTABLISHED\n";
+
+      if (IS_FIN(flags)) {
+        conStateMap->state.SetState(CLOSE_WAIT);
+        conStatemap->state.SetLastRecvd(seqnum + 1);
+
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout = Time() + 8;
+        SET_ACK(rflags)
+        make_packet(response, *conStateMap, rflags, 0, false);
+        MinetSend(mux, response);
+
+        Packet lastack;
+        conStateMap->state.SetState(LAST_ACK);
+        rflags = 0;
+        SET_FIN(rflags);
+        make_packet(p, *conStateMap, rflags, 0, false);
+      }
+      if (contentsize != 0) {
+        conStateMap->state.SetSendRwnd(winsize);
+        conStateMap->state.last_recvd = seqnum + payload.GetSize();
+        conStateMap->state.RecvBuffer.AddBack(payload);
+        SockRequestResponse write (WRITE, conStateMap->connection, conStateMap->RecvBuffer,
+                                    ConStateMap->RecvBuffer.GetSize(), EOK);
+        MinetSend(sock, write);
+        conStateMap->RecvBuffer.Clear();
+        rflags = 0;
+        SET_ACK(rflags);
+        make_packet(response, *conStateMap, rflags, 0, false);
+        MinetSend(mux, response);
+      }
+      if (IS_ACK(flags)) {
+
+        if (ack >= conStateMap->state.last_acked) {
+          int amt_ackd = ack - conStateMap->state.last_acked;
+          conStateMap->state.last_acked = ack;
+          conStateMap->state.SendBuffer.Erase(0, amount_of_data_acked);
+          conStateMap->bTmrActive = false;
+
+        }
+        if (conStateMap->state.GetState() == LAST_ACK) {
+          conStateMap->state.SetState(CLOSED);
+          clist.erase(conStateMap);
+        }
+      }
+      break;
+
+    case (6):  //SEND_DATA
+      if (IS_ACK(flags)) {
+        unsigned int bytesAcked;
+        if (ack < conStateMap->last_acked) return false; //Bolean check because both are unsigned
+        else bytesAcked = ack - conStateMap.last_acked;
+        conStateMap->state.last_acked = ack;
+        conStateMap->state.SendBuffer.Erase(0, bytesAcked);
+        conStateMap->bTmrActive = false;
+        if (conStateMap->state.SendBuffer.GetSize() <= 0) {
+          //Send socket response that transfer was ok
+          conStateMap->state.SetState(ESTABLISHED);
+          return true;
+        }
+        Buffer nextPayload = conStateMap->state.SendBuffer.ExtractFront(bytesAcked);
+        stopWaitSend(mux, *conStateMap, nextPayload);
+      }
+      break;
+
+    case (7): //CLOSE_WAIT
       //TODO close wait
-    }
+      break;
 
-    case (8) { //FIN_WAIT1
-     return IS_FIN(flags) ?
-       ( IS_ACK(flags) ?
-           timeWait(fsm, pkt) :
-           initiateClose(fsm, pkt) )
-     :
-       ( IS_ACK(flags) ?
-           finWait2(fsm, pkt) :
-           false );
-    }
+    case (8) : //FIN_WAIT1
+    cerr << "\nFINWAIT1\n";
 
-    case (9) { //CLOSING
+     if (IS_ACK(flags)) conStateMap->state.SetState(FIN_WAIT2);
+     if (IS_FIN(flags)) {
+       conStateMap->state.SetState(TIME_WAIT);
+       conStateMap->state.SetLastRecvd(seqnum+1);
+       SET_ACK(rflags);
+       make_packet(response, *conStateMap, rflags, 0, false);
+
+       conStateMap->bTmrActive = true;
+       conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
+       MinetSend(mux, response);
+     }
+     break;
+
+    case (9) : //CLOSING
       //TODO
-    }
-    case (10) { //LAST_ACK
-      //TODO
-    }
+      break;
 
-    case (11) { //FIN_WAIT2
-      return IS_FIN(flags) ? timeWait(fsm, pkt) : false;
-    }
+    case (10) : //LAST_ACK
+    cerr << "\nLASTACK\n";
 
-    case (12) { //TIME_WAIT
-      return IS_ACK(flags) ? timeWait(fsm, pkt) : false;
-    }
+      if (IS_ACK(flags)) {
+        conStateMap->state.SetState(CLOSED);
+        clist.erase(conStateMap);
+      }
+      break;
 
-    default { return false; }
+    case (11) : //FIN_WAIT2
+    cerr << "\nFINWAIT2\n";
+
+      if (IS_FIN(flags)) {
+        conStateMap->state.SetState(TIME_WAIT);
+        conStateMap->state.SetLastRecvd(seqnum + 1);
+        SET_ACK(rflags);
+        make_packet(response, *conStateMap, rflags, 0, false);
+
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
+        MinetSend(mux, response);
+
+      }
+      break;
+
+    case (12) : //TIME_WAIT
+    cerr << "\nTIMEWAIT\n";
+
+      if (IS_FIN(flags)) {
+        conStateMap->state.SetLastRecvd(seqnum+1);
+        conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
+        SET_ACK(rflags);
+        make_packet(response, *conStateMap, rflags, 0, false);
+        MinetSend(mux, response);
+      }
+      break;
+
+   cerr << "\nHandle packet complete: New State is " << conStateMap->state.GetState() << endl;
+
 
     }
   }
+}
+
+ int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
+                  Buffer data) {
+      Packet pkt;
+      tcp_csm.state.SendBuffer.AddBack(data); //Move to sock layer!!!
+      unsigned int dataSize = min(data.GetSize(), TCP_MAXIMUM_SEGMENT_SIZE);
+      // char databuff[sendBytes + 1];
+      // int dataSize = data.GetData(databuff, sendBytes, 0); //Is this ok? should i be using sendbuff
+      // Buffer sendBuff;
+      // sendBuff.SetData(databuff, dataSize, 0);
+      pkt(data.ExtractFront(dataSize));
+      cerr << "Sending data at offest " << end << " of size " << dataSize << "\n";
+      make_packet(p, tcp_csm, 0, dataSize);
+      MinetSend(mux, p);
+      tcp_csm.state.last_sent += dataSize;
+      return sendBytes; //return num bytes sent
+ }
 
 
 bool handleAppRequest(TCPState * fsm, MinetHandle * sock) {
@@ -264,24 +370,9 @@ bool handleAppRequest(TCPState * fsm, MinetHandle * sock) {
 bool listen(TCPState * fsm, MinetHandle * ipmux, MinetHandle * minSock) {
   //Waits to receive syn or be asked to send data, sends syn-ack to client
 
-  State deisred = CLOSED;
   if (!fsm->isInState(CLOSED)) return false;
   else fsm->setStateTo(LISTEN);
 
-}
-
-bool activeOpen(TCPState * fsm) {
-  //Actively opens a fsm to a client
-  if ( !(fsm->isInState(CLOSED) || fsm->isInState(LISTED)) ) return false;
-
-
-}
-
-bool passiveOpen (TCPState * fsm, MinetHandle * ipmux, MinetHandle * sock ) {
-  //Passively opens a fsm
-  listen(fsm, ipmux, );
-
-  conductStateTransition(CLOSED, LISTEN, fsm);
 }
 
 bool receiveSyn(TCPState * fsm, MinetHandle * ipmux) {
@@ -310,7 +401,7 @@ int main(int argc, char * argv[]) {
     MinetHandle mux;
     MinetHandle sock;
 
-    ConnectionList<TCPState> clist = ConnectionList<TCPState>();
+    ConnectionList<TCPState> clist;
 
     MinetInit(MINET_TCP_MODULE);
 
@@ -374,6 +465,7 @@ int main(int argc, char * argv[]) {
             tcph.GetSourcePort(c.destport);
             ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
             changeState(cs.state);
+            handlePacket(mux, sock, clist);
             if (cs != clist.end()) {
                 iph.GetTotalLength(len);
                 unsigned char headLen;
