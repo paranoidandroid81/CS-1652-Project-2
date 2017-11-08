@@ -264,7 +264,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         else bytesAcked = ack - conStateMap->state.last_acked;
         conStateMap->state.last_acked = ack;
         conStateMap->state.SendBuffer.Erase(0, bytesAcked);
-        conStateMap->state.bTmrActive = false;
+        conStateMap->bTmrActive = false;
         if (conStateMap->state.SendBuffer.GetSize() <= 0) {
           //Send socket response that transfer was ok
           conStateMap->state.SetState(ESTABLISHED);
@@ -282,8 +282,8 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
           cerr << "Only sent " << bytesSent <<", needed " << min(TCP_MAXIMUM_SEGMENT_SIZE, bytesSent) << endl;
           return false;
         }
-        conStateMap->state.bTmrActive = true;
-        conStateMap->state.timeout = Time() + 8; //Why 8?
+        conStateMap->bTmrActive = true;
+        conStateMap->timeout = Time() + 8; //Why 8?
       }
       break;
 
@@ -370,13 +370,13 @@ int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tc
       // int dataSize = data.GetData(databuff, sendBytes, 0); //Is this ok? should i be using sendbuff
       // Buffer sendBuff;
       // sendBuff.SetData(databuff, dataSize, 0);
-      pkt(*(data.ExtractFront(dataSize)));
+      pkt(Buffer(data.ExtractFront(dataSize)));
       cerr << " of size " << dataSize << "\n";
       makePacket(pkt, tcp_csm, 0, dataSize, isRetrans);
       MinetSend(mux, pkt);
-      tcp_csm.state.bTmrActive = true;
-      tcp_csm.state.timeout = Time() + 8;
-      tcp_csm.state.last_sent += (dataSize + 1);
+      tcp_csm.bTmrActive = true;
+      tcp_csm.timeout = Time() + 8;
+      tcp_csm.state.last_sent += (dataSize);
       return dataSize; //return num bytes sent
  }
 
@@ -402,8 +402,8 @@ void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned ch
         tph.SetFlags(flags, p);
         cerr << "\nLast Ack: \n" << curr.state.GetLastAcked() << endl;
         cerr << "\nSeq + 1: \n" << curr.state.GetLastSent() + 1 << endl;
-        //If this is a timeout, seq num is last seq num that other party
-        //ACK'd, otherwise it is last sent + 1
+        //If this is a retransmission, seq num is last seq num that other party
+        //Otherwise it is last sent + 1
         if (isRetrans) {
             tph.SetSeqNum(curr.state.GetLastAcked(), p);
         } else {
@@ -448,7 +448,7 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
                 repl.connection = req.connection;
                 repl.bytes = 0;
                 repl.error = EOK;
-                MinetSend(sock, rep);
+                MinetSend(sock, repl);
                 cerr << "\nConnection created!\n";
                 cerr << ctsmap.connection << endl;
                 cerr << "Current state: " << ctsmap.state.GetState() << endl;
