@@ -31,7 +31,15 @@
 
 using namespace std;
 
-Connection getConnection (TCPHeader tchp, IPHeader iph) {
+void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned char flags,
+                    int size, bool timeout);
+
+int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
+                                     Buffer data);
+
+
+
+Connection getConnection (TCPHeader tcph, IPHeader iph) {
   Connection c;
   iph.GetDestIP(c.src);
   iph.GetSourceIP(c.dest);
@@ -84,15 +92,15 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   Packet p;
   TCPHeader tcph;
   IPHeader iph;
-  Buffer payLoad;
+  Buffer payload;
   unsigned int currentState;
 
   MinetReceive(mux, p);
-  tcph = p.PopBackHeader(Headers::TCPHeader);
-  if (!tcph.isCorrectChecksum(p)) return false;
-  iph = p.PopFrontHeader(Headers::IPHeader);
+  tcph = p.PopBackHeader();
+  if (!tcph.IsCorrectChecksum(p)) return false;
+  iph = p.PopFrontHeader();
   payload = p.GetPayload();
-  Connection conn = getConnetion(tcph, iph);
+  Connection conn = getConnection(tcph, iph);
   ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
 
   unsigned char flags;
@@ -107,13 +115,13 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   tcph.GetAckNum(ack);
   tcph.GetSeqNum(seqnum);
   tcph.GetWinSize(winsize);
-  tcph.GetHeaderLength(tcphsize);
-  iph.GetHeaderLength(iphsize);
-  iph.GetTotalLength(totalsize);
+  tcph.GetHeaderLen(tcphsize);
+  iph.GetHeaderLen(iphsize);
+  iph.GetTotalLen(totalsize);
 
 
   if (conStateMap == clist.end()) {
-    //pass
+    return false; //?
   }
 
   currentState = conStateMap->state.GetState();
@@ -121,7 +129,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   unsigned char rflags = 0;
 
 
-  switch (current) {
+  switch (currentState) {
 
     case (1): //LISTEN
     cerr << "\nLISTEN\n";
@@ -162,9 +170,10 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         //delete write;
       }
       else if (IS_RST(flags)) {
-        //TODO
-      };
-      else return false;
+        //TODO reset connection
+        cerr << "Write reset!\n";
+        return false;
+      } else return false;
       break;
 
     case (3):  //SYN_SENT
@@ -205,7 +214,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
       if (IS_FIN(flags)) {
         conStateMap->state.SetState(CLOSE_WAIT);
-        conStatemap->state.SetLastRecvd(seqnum + 1);
+        conStateMap->state.SetLastRecvd(seqnum + 1);
 
         SET_ACK(rflags)
         makePacket(response, *conStateMap, rflags, 0, false);
@@ -224,9 +233,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.last_recvd = seqnum + payload.GetSize();
         conStateMap->state.RecvBuffer.AddBack(payload);
         SockRequestResponse write (WRITE, conStateMap->connection, conStateMap->RecvBuffer,
-                                    ConStateMap->RecvBuffer.GetSize(), EOK);
+                                    conStateMap->state.RecvBuffer.GetSize(), EOK);
         MinetSend(sock, write);
-        conStateMap->RecvBuffer.Clear();
+        conStateMap->state.RecvBuffer.Clear();
         rflags = 0;
         SET_ACK(rflags);
         makePacket(response, *conStateMap, rflags, 0, false);
