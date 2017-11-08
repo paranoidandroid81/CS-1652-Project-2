@@ -520,7 +520,7 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
             //data to send
             case WRITE: {
                 cerr << "\nSock write request...\n";
-                if (state == ESTABLISHED) {
+                if (currState == ESTABLISHED) {
                     //check if room in send buffer
                     if ((cs->state.SendBuffer.GetSize() + req.data.GetSize())
                         > (cs->state.TCP_BUFFER_SIZE)) {
@@ -532,7 +532,6 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
                             MinetSend(sock, repl);
                         } else if (cs->state.SendBuffer.GetSize() <= 0) {
                           //TODO: Send buffer has data!
-                          return false;
                         } else {
                             Buffer buf = req.data;
                             //set timer for write
@@ -540,7 +539,7 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
                             cs->timeout = Time() + 8;
 
                             //Add data to send buffer and send it!
-                            cs->state->SendBuffer.AddBack(buf);
+                            cs->state.SendBuffer.AddBack(buf);
                             int ret = stopWaitSend(mux, *cs, buf, false);
                             cerr << "\nSending this data...\n";
                             cerr << buf << endl;
@@ -548,15 +547,14 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
                             if (ret != 0) {
                                 repl.type = STATUS;
                                 repl.connection = req.connection;
-                                repl.byte = buf.GetSize();
+                                repl.bytes = buf.GetSize();
                                 repl.error = EOK;
                                 MinetSend(sock, repl);
                                 cs->state.SetState(SEND_DATA);
                             }
                             else {
                               //Err, no bytes sent!
-                              cerr < "No bytes sent!"
-                              return false;
+                              cerr << "\nNo bytes sent!\n";
                             }
                         }
                 }
@@ -570,7 +568,7 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
             //need to close connection
             case CLOSE: {
                 cerr << "\nSock close request...\n";
-                if (state == ESTABLISHED) {
+                if (currState == ESTABLISHED) {
                     //send FIN
                     cs->state.SetState(FIN_WAIT1);
                     cs->state.last_acked = cs->state.last_acked + 1;
@@ -584,8 +582,8 @@ void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &c
                     repl.type = STATUS;
                     repl.connection = req.connection;
                     repl.bytes = 0;
-                    repl.eroor = EOK;
-                    MinetSend(sock. repl);
+                    repl.error = EOK;
+                    MinetSend(sock, repl);
                 }
                 cerr << "\nClose finished...\n";
                 break;
@@ -617,7 +615,7 @@ void handleTimeout(MinetHandle &mux, ConnectionList<TCPState>::iterator it,
             //timeout false because no ACK has so SYN seq is just ISN
             makePacket(p, *it, flags, 0, false);
             MinetSend(mux, p);
-            break
+            break;
         }
         //resend SYNACK
         case SYN_RCVD: {
@@ -633,7 +631,7 @@ void handleTimeout(MinetHandle &mux, ConnectionList<TCPState>::iterator it,
             len = (it->state.last_sent) - (it->state.last_acked);
             buf = it->state.SendBuffer;
             buf = buf.ExtractFront(len);
-            sendData(mux, *it, data, true);
+            stopWaitSend(mux, *it, buf, true);
             break;
         }
         //resend FIN after initial FIN
@@ -641,7 +639,7 @@ void handleTimeout(MinetHandle &mux, ConnectionList<TCPState>::iterator it,
         //resend FIN afer FIN in response
         case LAST_ACK: {
             SET_FIN(flags);
-            makePacket(p, *it, flags, 0)
+            makePacket(p, *it, flags, 0, true);
             MinetSend(mux, p);
             break;
         }
@@ -712,7 +710,7 @@ int main(int argc, char * argv[]) {
     	     if (event.handle == sock) {
         		 // socket request or response has arrived
                  cerr << "\nTCP sock req or resp arrived!\n";
-                 handle_sock(mux, sock, clist);
+                 handleSock(mux, sock, clist);
     	     }
          }
 
@@ -723,7 +721,7 @@ int main(int argc, char * argv[]) {
 
              if (cs != clist.end()) {
                  if (Time().operator > ((*cs).timeout)) {
-                      handle_timout(mux, cs, clist);
+                      handleTimeout(mux, cs, clist);
                  }
              }
 
