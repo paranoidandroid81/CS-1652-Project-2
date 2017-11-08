@@ -668,9 +668,9 @@ int main(int argc, char * argv[]) {
 	return -1;
     }
 
-    cerr << "tcp_module STUB VERSION handling tcp traffic.......\n";
+    cerr << "tcp_module stop and wait handling tcp traffic.......\n";
 
-    MinetSendToMonitor(MinetMonitoringEvent("tcp_module STUB VERSION handling tcp traffic........"));
+    MinetSendToMonitor(MinetMonitoringEvent("tcp_module stop and waithandling tcp traffic........"));
 
     MinetEvent event;
     double timeout = 1;
@@ -680,100 +680,36 @@ int main(int argc, char * argv[]) {
 	     if ((event.eventtype == MinetEvent::Dataflow) &&
 	         (event.direction == MinetEvent::IN)) {
 
-	    if (event.handle == mux) {
-		    // ip packet has arrived!
-            Packet p;
-            unsigned short len;
-            bool checksumok;
-            MinetReceive(mux, p);
-            changeState(p, clist);
-            cerr << "Packet: " << endl;  //DEBUGGING
-            cerr << p << endl;          //DEBUGGING
-            TCPHeader tcph = p.PopBackHeader();
-            checksumok = tcph.IsCorrectChecksum(p);
-            IPHeader iph = p.PopFrontHeader();
-            Connection c;
-            // note that this is flipped around because
-            // "source" is interepreted as "this machine"
-            iph.GetDestIP(c.src);
-            iph.GetSourceIP(c.dest);
-            iph.GetProtocol(c.protocol);
-            tcph.GetDestPort(c.srcport);
-            tcph.GetSourcePort(c.destport);
-            ConnectionList<TCPState>::iterator cs = clist.FindMatching(c);
-            changeState(cs.state);
-            handlePacket(mux, sock, clist);
-            if (cs != clist.end()) {
-                iph.GetTotalLength(len);
-                unsigned char headLen;
-                tcph.GetHeaderLen(headLen);
-                len -= headLen;
-                Buffer &data = p.GetPayload().ExtractFront(len);
-                SockRequestResponse write(WRITE, (*cs).connection, data, len, EOK);
-                if (!checksumok) {
-                    MinetSendToMonitor(MinetMonitoringEvent("forwarding packet to sock even though checksum failed"));
-                }
-                MinetSend(sock, write);
-            } else {
-                MinetSendToMonitor(MinetMonitoringEvent("Unknown port"));
-            }
-	    }
+             cerr << "\nMinet event arriving...\n";
+             if (event.handle == mux) {
+                 cerr << "\nTCP mux packet has arrived!\n";
+    		     // ip packet has arrived!
+                 handle_packet(mux, sock, clist);
+             }
 
-	    if (event.handle == sock) {
-    		// socket request or response has arrived
-            SockRequestResponse req;
-            MinetReceive(sock, req);
-            cerr << "Sock request: " << endl;           //DEBUGGING
-            cerr << req << endl;         //DEBUGGING
-            ConnectionToStateMapping<TCPState> connectstate;
-            Connection c;
-            TCPState curr;
-            switch (req.type) {
-                case CONNECT:
-                {
-                    //active open to remote
-                    break;
-                }
-                case ACCEPT:
-                {
-                    //passive open from remote
-                    break;
-                }
-                case WRITE:
-                {
-                    //send TCP data
-                    ConnectionList<TCPState>::iterator cs = clist.FindMatching(req.connection);
-                    connectstate = *cs;
-                    c = connectstate.connection;
-                    curr = connectstate.state;
-                    break;
-                }
-                case FORWARD:
-                {
-                    //ignore
-                    break;
-                }
-                case CLOSE:
-                {
-                    break;
-                }
-                case STATUS:
-                {
-                    break;
-                }
-                default:
-                {
-                }
-            }
-	    }
+    	     if (event.handle == sock) {
+        		 // socket request or response has arrived
+                 cerr << "\nTCP sock req or resp arrived!\n";
+                 handle_sock(mux, sock, clist);
+    	     }
+         }
 
-	    if (event.eventtype == MinetEvent::Timeout) {
-	    // timeout ! probably need to resend some packets
-	    }
+    	 if (event.eventtype == MinetEvent::Timeout) {
+    	     // timeout ! probably need to resend some packets
+             //find earliest conn
+             ConnectionList<TCPState>::iterator cs = clist.FindEarliest();
+
+             if (cs != clist.end()) {
+                 if (Time().operator > ((*cs).timeout)) {
+                      handle_timout(mux, cs, clist);
+                 }
+             }
+
+    	 }
 
     }
 
-    }
+
 
     MinetDeinit();
 
