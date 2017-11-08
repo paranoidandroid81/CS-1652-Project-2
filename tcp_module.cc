@@ -27,20 +27,9 @@
 #include "tcpstate.h"
 #include "constate.h"
 #include "packet.h"
-#include "tcpstate.h"
 
 using namespace std;
-//
-//
-// bool concludeHandshake(TCPState * fsm, Packet *pkt) {
-//   //Send ack! wait for data transfer
-//   Packet p;
-//   unsigned short len;
-//   bool checksumok;
-//   MinetReceive(fsm->ipMux, p); //TODO fix this!
-//   p->ExtractHeaderFromPayload(TCPHeader, 8); //Why 8? This might need to change
-//   TCPHeader tcph;
-// }
+
 
 Connection getConnection (TCPHeader tchp, IPHeader iph) {
   Connection c;
@@ -51,44 +40,43 @@ Connection getConnection (TCPHeader tchp, IPHeader iph) {
   tcph.GetSourcePort(c.destport);
   return c;
 }
-
-Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
-  TCPHeader tcph = pkt->popBackHeader();
-  IPHeader iph = pkt->popFrontHeader();
-  bool checksumok = tcph.IsCorrectChecksum(p);
-
-  int acknum;
-  TCPHeader resp_tcph = TCPHeader();
-  IPHeader resp_iph = IPHeader();
-  Packet response;
-
-  if (!checksumok) {
-    if (!isSyn) acknum = lastacked; //Ack last packet!
-    else return NULL;
-  }
-  else {
-    int n;
-    tcph.GetSeqNum(&n);
-    acknum = n; //Non pipelined, only need 2 seq. nums
-  }
-
-  resp_iph.SetSourceIP(iph.GetDestIP());
-  resp_iph.SetDestIP(iph.GetSourceIP());
-  resp_iph.SetProtocol(IP_PROTO_TCP);
-  resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
-  response.PushFrontHeader(&resp_iph);
-
-  unsigned char flags = 0;
-  SET_ACK(&flags);
-  if (isSyn) SET_SYN(&flags);
-  resp_tcph.SetFlags(&flags, response);
-  resp_tcph.SetSeqNum(&acknum, &response);
-  resp_tcph.SetSourcePort(tcph.GetDestPort());
-  resp_tcph.SetDestPort(tcph.GetSourcePort());
-  resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
-  response.PushBackHeader(&resp_tcph);
-  return response; //Does it need a buffer?
-}
+// Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
+//   TCPHeader tcph = pkt->popBackHeader();
+//   IPHeader iph = pkt->popFrontHeader();
+//   bool checksumok = tcph.IsCorrectChecksum(p);
+//
+//   int acknum;
+//   TCPHeader resp_tcph = TCPHeader();
+//   IPHeader resp_iph = IPHeader();
+//   Packet response;
+//
+//   if (!checksumok) {
+//     if (!isSyn) acknum = lastacked; //Ack last packet!
+//     else return NULL;
+//   }
+//   else {
+//     int n;
+//     tcph.GetSeqNum(&n);
+//     acknum = n; //Non pipelined, only need 2 seq. nums
+//   }
+//
+//   resp_iph.SetSourceIP(iph.GetDestIP());
+//   resp_iph.SetDestIP(iph.GetSourceIP());
+//   resp_iph.SetProtocol(IP_PROTO_TCP);
+//   resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
+//   response.PushFrontHeader(&resp_iph);
+//
+//   unsigned char flags = 0;
+//   SET_ACK(&flags);
+//   if (isSyn) SET_SYN(&flags);
+//   resp_tcph.SetFlags(&flags, response);
+//   resp_tcph.SetSeqNum(&acknum, &response);
+//   resp_tcph.SetSourcePort(tcph.GetDestPort());
+//   resp_tcph.SetDestPort(tcph.GetSourcePort());
+//   resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
+//   response.PushBackHeader(&resp_tcph);
+//   return response; //Does it need a buffer?
+// }
 
 bool handle_packet (MinetHandle &mux, MinetHandle &sock,
                       ConnectionList<TCPState> clist) {
@@ -360,42 +348,269 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       return sendBytes; //return num bytes sent
  }
 
-
-bool handleAppRequest(TCPState * fsm, MinetHandle * sock) {
-  //TODO: Handle app requests!!! (TCP-Socket layer interface)
-  return false;
+void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned char flags,
+                    int size, bool timeout) {
+        cerr << "\nMaking packet...\n";
+        int packet_size = size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+        IPHeader iph;
+        TCPHeader tph;
+        iph.SetProtocol(IP_PROTO_TCP);
+        iph.SetSourceIP(curr.connection.src);
+        iph.SetDestIP(curr.connection.dest);
+        iph.SetTotalLength(packet_size);
+        p.PushFrontHeader(iph);
+        cerr << "\nIP Header: \n" << iph << endl;
+        tph.SetSourcePort(curr.connection.srcport, p);
+        tph.SetDestPort(curr.connection.destport, p);
+        //length of TCP header in words = 5
+        tph.SetHeaderLength(5, p);
+        tph.SetAckNum(curr.state.GetLastRecvd(), p);
+        tph.SetWinSize(curr.state.GetN(), p);
+        tph.SetUrgentPtr(0, p);
+        tph.SetFlags(flags, p);
+        cerr << "\nLast Ack: \n" << curr.state.GetLastAcked() << endl;
+        cerr << "\nSeq + 1: \n" << curr.state.GetLastSent() + 1 << endl;
+        //If this is a timeout, seq num is last seq num that other party
+        //ACK'd, otherwise it is last sent + 1
+        if (timeout) {
+            tph.SetSeqNum(curr.state.GetLastAcked(), p);
+        } else {
+            tph.SetSeqNum(curr.state.GetLastSent() + 1, p);
+        }
+        tph.RecomputeChecksum(p);
+        cerr << "\nTCP Header: \n" << tph << endl;
+        p.PushBackHeader(tph);
+        cerr << "\nDone making packet...\n";
 }
 
-
-bool listen(TCPState * fsm, MinetHandle * ipmux, MinetHandle * minSock) {
-  //Waits to receive syn or be asked to send data, sends syn-ack to client
-
-  if (!fsm->isInState(CLOSED)) return false;
-  else fsm->setStateTo(LISTEN);
-
+void handleSock(MinetHandle &mux, MinetHandle &sock. ConnectionList<TCPState> &clist) {
+    cerr << "\nHandling socket...\n";
+    SockRequestResponse req;
+    SockRequestResponse repl;
+    //get conn info from socket
+    MinetReceive(sock, req);
+    Packet p;
+    unsigned char flags;
+    ConnectionList<TCPState>::iterator iter;
+    iter = clist.FindMatching(req.connection);
+    if (iter == clist.end()) {
+        //no conn found, need to create new
+        cerr << "\nNo connection found in the list. Creating new...\n";
+        switch (req.type) {
+            //active open to remote, send SYN
+            case CONNECT: {
+                cerr << "\nConnect type...\n";
+                TCPState state(1, SYN_SENT, 5);       //TODO: why timertries =5 and why ISN = 1
+                SET_SYN(&flags);
+                ConnectionToStateMapping<TCPState> ctsmap(req.connection, Time() + 2,
+                                                        state, true);
+                ctsmap.state.last_acked = 0;
+                clist.push_back(ctsmap);
+                makePacket(p, ctsmap, flags, 0, false);        //size 0 as SYN w/o data
+                //sets timer active, sets timeout
+                iter->bTmrActive = true;
+                iter->timeout = Time() + 2;
+                MinetSend(mux, p);
+                //inform socket SYN has been sent
+                repl.type = STATUS;
+                repl.connection = req.connection;
+                repl.bytes = 0;
+                repl.error = EOK;
+                MinetSend(sock, rep);
+                cerr << "\nConnection created!\n";
+                cerr << ctsmap.connection << endl;
+                cerr << "Current state: " << ctsmap.state.GetState() << endl;
+                cerr << "\nConnect finished...\n";
+                break;
+            }
+            //passive open from remote, send nothing
+            case ACCEPT: {
+                cerr << "\nAccept type...\n";
+                TCPState state(1, LISTEN, 5);
+                ConnectionToStateMapping<TCPState> ctsmap(req.connection, Time(),
+                                                            state, false);
+                clist.push_back(ctsmap);
+                //inform socket passive conn setup
+                repl.type = STATUS;
+                repl.bytes = 0;
+                repl.connection = req.connection;
+                repl.error = EOK;
+                MinetSend(sock, repl);
+                cerr << "\nConnection created!\n";
+                cerr << ctsmap.connection << endl;
+                cerr << "Current state: " << ctsmap.state.GetState() << endl;
+                cerr << "\nAccept finished...\n";
+                break;
+            }
+            //ignore
+            case STATUS: {
+                break;
+            }
+            //impossible to write to nonexistent conn, send error to sock
+            case WRITE: {
+                repl.type = STATUS;
+                repl.connection = req.connection;
+                repl.bytes = 0;
+                repl.error = ENOMATCH;
+                MinetSend(sock, repl);
+                break;
+            }
+            //ignore
+            case FORWARD: {
+                break;
+            }
+            //impossible to close nonexistent conn
+            case CLOSE: {
+                repl.type = STATUS;
+                repl.connection = req.connection;
+                repl.bytes = 0;
+                repl.error = ENOMATCH;
+                MinetSend(sock, repl);
+                break;
+            }
+            default: {
+                break;
+            }
+        }
+    } else {
+        cerr << "\nConnection found in the list...\n";
+        unsigned int currState;
+        currState = iter->state.GetState();
+        switch (req.type) {
+            //already extant, can't do new active open
+            case CONNECT: {
+                break;
+            }
+            case ACCEPT: {
+                break;
+            }
+            //data to send
+            case WRITE: {
+                cerr << "\nSock write request...\n";
+                if (state == ESTABLISHED) {
+                    //check if room in send buffer
+                    if ((iter->state.SendBuffer.GetSize() + req.data.GetSize())
+                        > (iter->state.TCP_BUFFER_SIZE)) {
+                            //buffer overflow
+                            repl.type = STATUS;
+                            repl.connection = req.connection;
+                            repl.bytes = 0;
+                            repl.error = EBUF_SPACE;
+                            MinetSend(sock, repl);
+                        } else {
+                            Buffer buf = req.data;
+                            //set timer for write
+                            iter->bTmrActive = true;
+                            iter->timeout = Time() + 8;
+                            //send it, not timeout
+                            int ret = sendData(mux, *iter, buf, false);
+                            cerr << "\nSending this data...\n";
+                            cerr << iter->state.SendBuffer << endl;
+                            //if success, inform socket
+                            if (ret == 0) {
+                                repl.type = STATUS;
+                                repl.connection = req.connection;
+                                repl.byte = buf.GetSize();
+                                repl.error = EOK;
+                                MinetSend(sock, repl);
+                            }
+                        }
+                }
+                cerr << "\nWrite finished...\n";
+                break;
+            }
+            //ignore
+            case FORWARD: {
+                break;
+            }
+            //need to close connection
+            case CLOSE: {
+                cerr << "\nSock close request...\n";
+                if (state == ESTABLISHED) {
+                    //send FIN
+                    iter->state.SetState(FIN_WAIT1);
+                    iter->state.last_acked = iter->state.last_acked + 1;
+                    //begin timeout period for FIN
+                    iter->bTmrActive = true;
+                    iter->timeout = Time() + 8;
+                    SET_FIN(&flags);
+                    makePacket(p, *iter, flags, 0, false);
+                    MinetSend(mux, p);
+                    //inform conn we sent FIN
+                    repl.type = STATUS;
+                    repl.connection = req.connection;
+                    repl.bytes = 0;
+                    repl.eroor = EOK;
+                    MinetSend(sock. repl);
+                }
+                cerr << "\nClose finished...\n";
+                break;
+            }
+            //handled in write so ignore
+            case STATUS: {
+                break;
+            }
+            default: {
+                break;
+            }
+        }
+    }
+    cerr << "\nEnd of socket handling...\n";
 }
 
-bool receiveSyn(TCPState * fsm, MinetHandle * ipmux) {
-
-} */ //TODO: Fix all
-
-Packet makePacket(SockRequestResponse r) {
-    unsigned bytes = MIN_MACRO(TCP_MAXIMUM_SEGMENT_SIZE, r.data.GetSize());
-    Packet pack(r.data.ExtractFront(bytes));
-    IPHeader ih;
-    ih.SetProtocol(IP_PROTO_TCP);
-    ih.SetSourceIP(r.connection.src);
-    ih.SetDestIP(r.connection.dest);
-    ih.SetTotalLength(bytes+TCP_HEADER_BASE_LENGTH+IP_HEADER_BASE_LENGTH);
-    pack.PushFrontHeader(ih);
-    TCPHeader th;
-    th.SetSourcePort(r.connection.srcport, pack);
-    th.SetDestPort(r.connection.destport, pack);
-    th.SetLength(TCP_HEADER_BASE_LENGTH+bytes, pack);
-    pack.PushBackHeader(th);
-    return pack;
+void handleTimeout(MinetHandle &mux, ConnectionList<TCPState>::iterator it,
+                    ConnectionList<TCPState> &clist) {
+    cerr << "\nTime out happened on conn in list!\n";
+    unsigned int state = it->state.GetState();
+    Packet p;
+    unsigned char flags;
+    Buffer buf;
+    unsigned short len;
+    switch (state) {
+        //resend SYN packet
+        case SYN_SENT: {
+            SET_SYN(&flags);
+            //timeout false because no ACK has so SYN seq is just ISN
+            makePacket(p, *it, flags, 0, false);
+            MinetSend(mux, p);
+            break
+        }
+        //resend SYNACK
+        case SYN_RCVD: {
+            SET_SYN(&flags);
+            SET_ACK(&flags);
+            makePacket(p, *it, flags, 0, true);
+            MinetSend(mux, p);
+            break;
+        }
+        //resend sent data
+        case ESTABLISHED: {
+            //find data lost in timeout, extract it from send buffer
+            len = (it->state.last_sent) - (it->state.last_acked);
+            buf = it->state.SendBuffer;
+            buf = buf.ExtractFront(len);
+            sendData(mux, *it, data, true);
+            break;
+        }
+        //resend FIN after initial FIN
+        case FIN_WAIT1:
+        //resend FIN afer FIN in response
+        case LAST_ACK: {
+            SET_FIN(&flags);
+            makePacket(p, *it, flags, 0)
+            MinetSend(mux, p);
+            break;
+        }
+        //assume they got ACK and close
+        case TIME_WAIT: {
+            cerr << "\nTime wait expired...\n";
+            it->state.SetState(CLOSED);
+            clist.erase(it);
+        }
+        default:
+            break;
+    }
 }
-
 
 int main(int argc, char * argv[]) {
     MinetHandle mux;
@@ -484,50 +699,7 @@ int main(int argc, char * argv[]) {
 
 	    if (event.handle == sock) {
     		// socket request or response has arrived
-            SockRequestResponse req;
-            MinetReceive(sock, req);
-            cerr << "Sock request: " << endl;           //DEBUGGING
-            cerr << req << endl;         //DEBUGGING
-            ConnectionToStateMapping<TCPState> connectstate;
-            Connection c;
-            TCPState curr;
-            switch (req.type) {
-                case CONNECT:
-                {
-                    //active open to remote
-                    break;
-                }
-                case ACCEPT:
-                {
-                    //passive open from remote
-                    break;
-                }
-                case WRITE:
-                {
-                    //send TCP data
-                    ConnectionList<TCPState>::iterator cs = clist.FindMatching(req.connection);
-                    connectstate = *cs;
-                    c = connectstate.connection;
-                    curr = connectstate.state;
-                    break;
-                }
-                case FORWARD:
-                {
-                    //ignore
-                    break;
-                }
-                case CLOSE:
-                {
-                    break;
-                }
-                case STATUS:
-                {
-                    break;
-                }
-                default:
-                {
-                }
-            }
+
 	    }
 
 	    if (event.eventtype == MinetEvent::Timeout) {
