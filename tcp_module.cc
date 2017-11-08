@@ -32,10 +32,10 @@
 using namespace std;
 
 void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned char flags,
-                    int size, bool timeout);
+                    int size, bool isRetrans);
 
 int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
-                                     Buffer data);
+                                     Buffer data, bool isRetrans);
 
 
 
@@ -116,8 +116,8 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   tcph.GetSeqNum(seqnum);
   tcph.GetWinSize(winsize);
   tcph.GetHeaderLen(tcphsize);
-  iph.GetHeaderLen(iphsize);
-  iph.GetTotalLen(totalsize);
+  iph.GetHeaderLength(iphsize);
+  iph.GetTotalLength(totalsize);
 
 
   if (conStateMap == clist.end()) {
@@ -216,7 +216,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(CLOSE_WAIT);
         conStateMap->state.SetLastRecvd(seqnum + 1);
 
-        SET_ACK(rflags)
+        SET_ACK(rflags);
         makePacket(response, *conStateMap, rflags, 0, false);
         MinetSend(mux, response);
         conStateMap->bTmrActive = true;
@@ -232,7 +232,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetSendRwnd(winsize);
         conStateMap->state.last_recvd = seqnum + payload.GetSize();
         conStateMap->state.RecvBuffer.AddBack(payload);
-        SockRequestResponse write (WRITE, conStateMap->connection, conStateMap->RecvBuffer,
+        SockRequestResponse write (WRITE, conStateMap->connection, conStateMap->state.RecvBuffer,
                                     conStateMap->state.RecvBuffer.GetSize(), EOK);
         MinetSend(sock, write);
         conStateMap->state.RecvBuffer.Clear();
@@ -260,20 +260,30 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
     case (6):  //SEND_DATA
       if (IS_ACK(flags)) {
         unsigned int bytesAcked;
-        if (ack < conStateMap->last_acked) return false;
-        else bytesAcked = ack - conStateMap.last_acked;
+        if (ack < conStateMap->state.last_acked) return false;
+        else bytesAcked = ack - conStateMap->state.last_acked;
         conStateMap->state.last_acked = ack;
         conStateMap->state.SendBuffer.Erase(0, bytesAcked);
-        conStateMap->bTmrActive = false;
+        conStateMap->state.bTmrActive = false;
         if (conStateMap->state.SendBuffer.GetSize() <= 0) {
           //Send socket response that transfer was ok
           conStateMap->state.SetState(ESTABLISHED);
           return true;
         }
-        Buffer nextPayload = conStateMap->state.SendBuffer.ExtractFront(bytesAcked);
-        int bytesSent = stopWaitSend(mux, *conStateMap, nextPayload);
-        conStateMap->bTmrActive = true;
-        conStateMap->timeout = Time() + 8; //Why 8?
+        Buffer &nextPayload(conStateMap->state.SendBuffer);
+        if (nextPayload.GetSize() == 0) {
+          //All data has been sent!
+          conStateMap->state.SetState(ESTABLISHED);
+          return true;
+        }
+        int bytesSent = stopWaitSend(mux, *conStateMap, nextPayload, false);
+        if (bytesSent == 0) {
+          //We might have a problem
+          cerr << "Only sent " << bytesSent <<", needed " << min(TCP_MAXIMUM_SEGMENT_SIZE, bytesSent) << endl;
+          return false;
+        }
+        conStateMap->state.bTmrActive = true;
+        conStateMap->state.timeout = Time() + 8; //Why 8?
       }
       break;
 
@@ -321,7 +331,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(TIME_WAIT);
         conStateMap->state.SetLastRecvd(seqnum + 1);
         SET_ACK(rflags);
-        makePacket(response, *conStateMap, rflags, 0);
+        makePacket(response, *conStateMap, rflags, 0, false);
 
         conStateMap->bTmrActive = true;
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
@@ -341,7 +351,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetLastRecvd(seqnum+1);
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
         SET_ACK(rflags);
-        makePacket(response, *conStateMap, rflags, 0);
+        makePacket(response, *conStateMap, rflags, 0, false);
         MinetSend(mux, response);
       }
       break;
@@ -353,25 +363,25 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 }
 
 int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
-                  Buffer data) {
+                  Buffer data, bool isRetrans) {
       Packet pkt;
       unsigned int dataSize = min(data.GetSize(), TCP_MAXIMUM_SEGMENT_SIZE);
       // char databuff[sendBytes + 1];
       // int dataSize = data.GetData(databuff, sendBytes, 0); //Is this ok? should i be using sendbuff
       // Buffer sendBuff;
       // sendBuff.SetData(databuff, dataSize, 0);
-      pkt(data.ExtractFront(dataSize));
-      cerr << "Sending data at offest " << end << " of size " << dataSize << "\n";
-      make_packet(p, tcp_csm, 0, dataSize);
-      MinetSend(mux, p);
-      tcp_csm->state.bTmrActive = true;
-      tcp_csm->state.timeout = Time() + 8;
-      tcp_csm.state.last_sent += dataSize;
-      return sendBytes; //return num bytes sent
+      pkt(*(data.ExtractFront(dataSize)));
+      cerr << " of size " << dataSize << "\n";
+      makePacket(pkt, tcp_csm, 0, dataSize, isRetrans);
+      MinetSend(mux, pkt);
+      tcp_csm.state.bTmrActive = true;
+      tcp_csm.state.timeout = Time() + 8;
+      tcp_csm.state.last_sent += (dataSize + 1);
+      return dataSize; //return num bytes sent
  }
 
 void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned char flags,
-                    int size, bool timeout) {
+                    int size, bool isRetrans) {
         cerr << "\nMaking packet...\n";
         int packet_size = size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
         IPHeader iph;
@@ -385,7 +395,7 @@ void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned ch
         tph.SetSourcePort(curr.connection.srcport, p);
         tph.SetDestPort(curr.connection.destport, p);
         //length of TCP header in words = 5
-        tph.SetHeaderLength(5, p);
+        tph.SetHeaderLen(5, p);
         tph.SetAckNum(curr.state.GetLastRecvd(), p);
         tph.SetWinSize(curr.state.GetN(), p);
         tph.SetUrgentPtr(0, p);
@@ -394,7 +404,7 @@ void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned ch
         cerr << "\nSeq + 1: \n" << curr.state.GetLastSent() + 1 << endl;
         //If this is a timeout, seq num is last seq num that other party
         //ACK'd, otherwise it is last sent + 1
-        if (timeout) {
+        if (isRetrans) {
             tph.SetSeqNum(curr.state.GetLastAcked(), p);
         } else {
             tph.SetSeqNum(curr.state.GetLastSent() + 1, p);
@@ -405,7 +415,7 @@ void makePacket(Packet &p, ConnectionToStateMapping<TCPState> &curr, unsigned ch
         cerr << "\nDone making packet...\n";
 }
 
-void handleSock(MinetHandle &mux, MinetHandle &sock. ConnectionList<TCPState> &clist) {
+void handleSock(MinetHandle &mux, MinetHandle &sock, ConnectionList<TCPState> &clist) {
     cerr << "\nHandling socket...\n";
     SockRequestResponse req;
     SockRequestResponse repl;
@@ -531,7 +541,7 @@ void handleSock(MinetHandle &mux, MinetHandle &sock. ConnectionList<TCPState> &c
 
                             //Add data to send buffer and send it!
                             cs->state->SendBuffer.AddBack(buf);
-                            int ret = stopWaitSend(mux, *cs, buf);
+                            int ret = stopWaitSend(mux, *cs, buf, false);
                             cerr << "\nSending this data...\n";
                             cerr << buf << endl;
                             //if success, inform socket
