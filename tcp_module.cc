@@ -136,7 +136,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         //Send syn-ack
         SET_ACK(rflags);
         SET_SYN(rflags);
-        make_packet(response, *(conStateMap), rflags, 0, false);
+        makePacket(response, *(conStateMap), rflags, 0, false);
         MinetSend(mux, response);
         conStateMap->state.last_sent++;
         conStateMap->bTmrActive = true;
@@ -208,7 +208,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStatemap->state.SetLastRecvd(seqnum + 1);
 
         SET_ACK(rflags)
-        make_packet(response, *conStateMap, rflags, 0, false);
+        makePacket(response, *conStateMap, rflags, 0, false);
         MinetSend(mux, response);
         conStateMap->bTmrActive = true;
         conStateMap->timeout = Time() + 8;
@@ -217,7 +217,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(LAST_ACK);
         rflags = 0;
         SET_FIN(rflags);
-        make_packet(p, *conStateMap, rflags, 0, false);
+        makePacket(p, *conStateMap, rflags, 0, false);
       }
       else if (totalsize != 0) {
         conStateMap->state.SetSendRwnd(winsize);
@@ -229,7 +229,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->RecvBuffer.Clear();
         rflags = 0;
         SET_ACK(rflags);
-        make_packet(response, *conStateMap, rflags, 0, false);
+        makePacket(response, *conStateMap, rflags, 0, false);
         MinetSend(mux, response);
       }
       if (IS_ACK(flags)) {
@@ -280,7 +280,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
        conStateMap->state.SetState(TIME_WAIT);
        conStateMap->state.SetLastRecvd(seqnum+1);
        SET_ACK(rflags);
-       make_packet(response, *conStateMap, rflags, 0, false);
+       makePacket(response, *conStateMap, rflags, 0, false);
 
        conStateMap->bTmrActive = true;
        conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
@@ -312,7 +312,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetState(TIME_WAIT);
         conStateMap->state.SetLastRecvd(seqnum + 1);
         SET_ACK(rflags);
-        make_packet(response, *conStateMap, rflags, 0);
+        makePacket(response, *conStateMap, rflags, 0);
 
         conStateMap->bTmrActive = true;
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
@@ -332,7 +332,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->state.SetLastRecvd(seqnum+1);
         conStateMap->timeout = Time() + (2*MSL_TIME_SECS);
         SET_ACK(rflags);
-        make_packet(response, *conStateMap, rflags, 0);
+        makePacket(response, *conStateMap, rflags, 0);
         MinetSend(mux, response);
       }
       break;
@@ -341,10 +341,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
 
     }
-  }
 }
 
- int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
+int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
                   Buffer data) {
       Packet pkt;
       unsigned int dataSize = min(data.GetSize(), TCP_MAXIMUM_SEGMENT_SIZE);
