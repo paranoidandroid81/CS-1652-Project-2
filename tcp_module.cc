@@ -101,11 +101,9 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   p.ExtractHeaderFromPayload<TCPHeader>(len);
   tcph = p.FindHeader(Headers::TCPHeader);
   cerr << "Got tcp header" << endl;
-  unsigned short c;
-  tcph.GetChecksum(c);
-  if (c != 0 ) return false;
+  if (!(tcph.IsCorrectChecksum(p))) return false;
   else {
-     cerr << "checksum correct" << endl;
+     cerr << "Checksum correct" << endl;
   }
   iph = p.FindHeader(Headers::IPHeader);
   cerr << "Got IP header!" << endl;
@@ -114,7 +112,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   Connection conn = getConnection(tcph, iph);
 
   ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
-  cerr << "Created connection state mapping" << endl;
+  cerr << "Found connection state mapping" << endl;
 
   unsigned char flags;
   unsigned int ack;
@@ -132,27 +130,39 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   iph.GetHeaderLength(iphsize);
   iph.GetTotalLength(totalsize);
 
-  cerr << "Got TCP and IP header vars" << endl;
+  cerr << "Got TCP and IP header info" << endl;
+  cerr << "FLAGS: SYN = " << IS_SYN(flags) << endl;
+  cerr << "ACK = " << IS_ACK(flags) << endl;
+  cerr << flags << endl;
 
 
   if (conStateMap == clist.end()) {
-    return false; //?
-  }
+    cerr << "Connection is at end of list!" << endl;
+    if (IS_SYN(flags) && !IS_ACK(flags)) {
+	conStateMap->state.SetState(LISTEN);
+	cerr << "New connection" << endl;
+    }
+    else {
+      cerr << "Connection is\n " << conn << endl;
+    }
+}
 
   currentState = conStateMap->state.GetState();
   Packet response;
   unsigned char rflags = 0;
 
-
+  cerr << "current state = " << currentState << endl;
   switch (currentState) {
 
-    case (1): //LISTEN
-    cerr << "\nLISTEN\n";
+    case (LISTEN): //LISTEN
+    cerr << "\nLISTEN\n" << endl;
       if (IS_SYN(flags)) {
 
         //Update connection-state mapping with iterator
         conStateMap->connection = conn;
+	cerr << "Creating connection:\n" << conn << endl;
         conStateMap->state.SetState(SYN_RCVD);
+	cerr << "Transitioning to state " << conStateMap->state.GetState() << endl;
         conStateMap->state.SetLastRecvd(seqnum + 1);
         conStateMap->state.last_acked = conStateMap->state.last_sent;
 
@@ -166,9 +176,14 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         conStateMap->timeout=Time() + 8;
 
       }
+
+      else {
+      	cerr << "Invalid Packet: Listening server expected SYN";
+	    return false;
+      }
       break;
 
-    case (2): //SYN_RCVD
+    case (SYN_RCVD): //SYN_RCVD
     cerr << "\nSYN_RCVD\n";
 
       if (IS_ACK(flags)) {
@@ -191,7 +206,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       } else return false;
       break;
 
-    case (3):  //SYN_SENT
+    case (SYN_SENT):  //SYN_SENT
     cerr << "\nSYN_SENT\n";
 
       if (IS_SYN(flags)) {
@@ -220,12 +235,14 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
       break;
 
-    case (4):  //SYN_SENT1
+    case (SYN_SENT1):  //SYN_SENT1
       //TODO
+      cerr << "Invalid state" << endl;
+      return false;
       break;
 
-    case (5):  //ESTABLISHED
-    cerr << "\nESTABLISHED\n";
+    case (ESTABLISHED):  //ESTABLISHED
+      cerr << "\nESTABLISHED\n";
 
       if (IS_FIN(flags)) {
         conStateMap->state.SetState(CLOSE_WAIT);
@@ -272,7 +289,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       }
       break;
 
-    case (6):  //SEND_DATA
+    case (SEND_DATA):  //SEND_DATA
       if (IS_ACK(flags)) {
         unsigned int bytesAcked;
         if (ack < conStateMap->state.last_acked) return false;
@@ -306,7 +323,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       //TODO close wait
       break;
 
-    case (8) : //FIN_WAIT1
+    case (FIN_WAIT1) : //FIN_WAIT1
     cerr << "\nFINWAIT1\n";
 
      if (IS_ACK(flags)) conStateMap->state.SetState(FIN_WAIT2);
@@ -326,7 +343,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       //TODO
       break;
 
-    case (10) : //LAST_ACK
+    case (LAST_ACK) : //LAST_ACK
     cerr << "\nLASTACK\n";
 
       if (IS_ACK(flags)) {
@@ -339,7 +356,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       }
       break;
 
-    case (11) : //FIN_WAIT2
+    case (FIN_WAIT2) : //FIN_WAIT2
     cerr << "\nFINWAIT2\n";
 
       if (IS_FIN(flags)) {
@@ -359,7 +376,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
       }
       break;
 
-    case (12) : //TIME_WAIT
+    case (TIME_WAIT) : //TIME_WAIT
     cerr << "\nTIMEWAIT\n";
 
       if (IS_FIN(flags)) {
@@ -370,12 +387,14 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         MinetSend(mux, response);
       }
       break;
+    default:
+	   cerr << "Invalid state!" << endl;
+	   return false;
+    cerr << "\nHandle packet complete: New State is " << conStateMap->state.GetState() << endl;
 
-   cerr << "\nHandle packet complete: New State is " << conStateMap->state.GetState() << endl;
+  }
 
-
-    }
-    return true;
+  return true;
 }
 
 int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
@@ -718,7 +737,9 @@ int main(int argc, char * argv[]) {
              if (event.handle == mux) {
                  cerr << "\nTCP mux packet has arrived!\n";
     		     // ip packet has arrived!
-                 handle_packet(mux, sock, clist);
+                if(!handle_packet(mux, sock, clist)) {
+		  cerr << "There was a problem with the packet!!" << endl;
+		}
              }
 
     	     if (event.handle == sock) {
