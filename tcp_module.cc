@@ -96,14 +96,21 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
   unsigned int currentState;
 
   MinetReceive(mux, p);
-  tcph = p.PopBackHeader();
+  unsigned short len;
+  len = TCPHeader::EstimateTCPHeaderLength(p);
+  p.ExtractHeaderFromPayload<TCPHeader>(len);
+  tcph = p.FindHeader(Headers::TCPHeader);
   cerr << "Got tcp header" << endl;
-  if (!tcph.IsCorrectChecksum(p)) return false;
-  cerr << "checksum correct!" << endl;
-  iph = p.PopFrontHeader();
+  unsigned short c;
+  tcph.GetChecksum(c);
+  if (c != 0 ) return false;
+  else {
+     cerr << "checksum correct" << endl;
+  }
+  iph = p.FindHeader(Headers::IPHeader);
   cerr << "Got IP header!" << endl;
   payload = p.GetPayload();
-  cerr << "Got payload!"; << endl;
+  cerr << "Got payload!" << endl;
   Connection conn = getConnection(tcph, iph);
 
   ConnectionList<TCPState>::iterator conStateMap = clist.FindMatching(conn);
@@ -368,6 +375,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
 
     }
+    return true;
 }
 
 int stopWaitSend (const MinetHandle &mux, ConnectionToStateMapping<TCPState> &tcp_csm,
