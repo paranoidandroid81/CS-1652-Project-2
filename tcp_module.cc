@@ -49,43 +49,6 @@ Connection getConnection (TCPHeader tcph, IPHeader iph) {
   return c;
 }
 
-// Packet makeAck (Packet *pkt, int lastacked, bool isSyn) {
-//   TCPHeader tcph = pkt->popBackHeader();
-//   IPHeader iph = pkt->popFrontHeader();
-//   bool checksumok = tcph.IsCorrectChecksum(p);
-//
-//   int acknum;
-//   TCPHeader resp_tcph = TCPHeader();
-//   IPHeader resp_iph = IPHeader();
-//   Packet response;
-//
-//   if (!checksumok) {
-//     if (!isSyn) acknum = lastacked; //Ack last packet!
-//     else return NULL;
-//   }
-//   else {
-//     int n;
-//     tcph.GetSeqNum(&n);
-//     acknum = n; //Non pipelined, only need 2 seq. nums
-//   }
-//
-//   resp_iph.SetSourceIP(iph.GetDestIP());
-//   resp_iph.SetDestIP(iph.GetSourceIP());
-//   resp_iph.SetProtocol(IP_PROTO_TCP);
-//   resp_iph.SetTotalLength(TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH);
-//   response.PushFrontHeader(&resp_iph);
-//
-//   unsigned char flags = 0;
-//   SET_ACK(&flags);
-//   if (isSyn) SET_SYN(&flags);
-//   resp_tcph.SetFlags(&flags, response);
-//   resp_tcph.SetSeqNum(&acknum, &response);
-//   resp_tcph.SetSourcePort(tcph.GetDestPort());
-//   resp_tcph.SetDestPort(tcph.GetSourcePort());
-//   resp_tcph.SetLength(TCP_HEADER_BASE_LENGTH, response);
-//   response.PushBackHeader(&resp_tcph);
-//   return response; //Does it need a buffer?
-// }
 
 bool handle_packet (MinetHandle &mux, MinetHandle &sock,
                       ConnectionList<TCPState> clist) {
@@ -138,7 +101,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
 
   if (conStateMap == clist.end()) {
     cerr << "Connection is at end of list!" << endl;
-    if (IS_SYN(flags) && !IS_ACK(flags)) {
+    if ((IS_SYN(flags) && !IS_ACK(flags)) || IS_RST(flags)) {
 	conStateMap->state.SetState(LISTEN);
 	cerr << "New connection" << endl;
     }
@@ -294,6 +257,7 @@ bool handle_packet (MinetHandle &mux, MinetHandle &sock,
         unsigned int bytesAcked;
         if (ack < conStateMap->state.last_acked) return false;
         else bytesAcked = ack - conStateMap->state.last_acked;
+
         conStateMap->state.last_acked = ack;
         conStateMap->state.SendBuffer.Erase(0, bytesAcked);
         conStateMap->bTmrActive = false;
